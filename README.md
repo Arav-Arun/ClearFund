@@ -6,7 +6,7 @@ ClearFund is a milestone-based donation escrow app on Ethereum Sepolia.
 Donors fund NGO campaigns, but funds do not go straight to the NGO. ETH stays
 inside a campaign smart contract and is released in stages only after milestone
 evidence is submitted, checked by an AI oracle, and survives a 24-hour donor
-veto window.
+review window.
 
 The goal is simple: make donations accountable without forcing donors to vote
 on every small step.
@@ -20,8 +20,8 @@ properly. ClearFund moves that trust into a transparent workflow:
 - NGOs receive only a small bootstrap release when the campaign starts.
 - Remaining funds unlock milestone by milestone.
 - Milestone evidence must come from live camera capture and browser location.
-- The AI oracle gives a first-pass approval or rejection.
-- Donors get a 24-hour veto window before funds are released.
+- The AI oracle gives a visible first-pass approval or rejection with reasoning.
+- Donors get a 24-hour review window before the AI result becomes final.
 - If the NGO misses a milestone deadline, donors can cancel and claim refunds
   from the remaining escrow.
 
@@ -34,8 +34,8 @@ properly. ClearFund moves that trust into a transparent workflow:
 | Bootstrap release | A 1-15% bootstrap tranche is released when fundraising passes the start threshold. |
 | Live evidence | NGOs must capture evidence through the browser camera. No file upload field is exposed. |
 | Location permission | Browser geolocation is requested during evidence capture. No manual location input is used. |
-| AI oracle | The Vercel API route sends the live photo, location, and milestone text to OpenAI, then signs the approval or rejection transaction. |
-| Donor veto | Donors can veto during the 24-hour review window. Non-voters count as yes when the window ends. |
+| AI oracle | The Vercel API route sends the live photo, location, and milestone text to OpenAI, then records the AI recommendation and explanation on-chain. |
+| Donor veto | Donors can vote no during the 24-hour review window. Non-voters accept the AI recommendation when the window ends. |
 | Majority rule | A milestone is rejected only if veto votes become a strict donor majority. |
 | Refund path | If the campaign is cancelled or fundraising fails, donors can claim proportional refunds from the remaining balance. |
 | RainbowKit wallet support | Wallet connection uses RainbowKit dark mode for browser, Safari, and mobile wallet flows. |
@@ -52,12 +52,15 @@ properly. ClearFund moves that trust into a transparent workflow:
 6. The frontend sends the photo, location, capture timestamp, campaign address,
    and milestone id to `frontend/api/analyze.js`.
 7. The oracle checks that the campaign is registered, rejects stale evidence,
-   asks the model for an `APPROVE` or `REJECT`, then calls the campaign contract.
-8. If approved, the milestone enters a 24-hour veto window.
-9. Donors may vote no by calling `vetoMilestone`.
-10. If veto votes are not a strict majority after 24 hours, anyone can call
-    `executeMilestone` to release the tranche.
-11. If a strict majority veto happens, the milestone is rejected. The NGO may
+   asks the model for an `APPROVE` or `REJECT`, and records what the AI saw plus
+   why it recommended that outcome.
+8. Approval and rejection both enter the same 24-hour donor review window.
+9. Donors may vote no by calling `vetoMilestone`; doing nothing accepts the AI
+   recommendation.
+10. After 24 hours, anyone can call `executeMilestone` to finalize the review.
+11. If no strict donor majority voted no, the AI recommendation becomes final:
+    approval releases funds, rejection keeps funds locked for resubmission.
+12. If a strict majority voted no, the milestone is rejected. The NGO may
     resubmit before the deadline. If the deadline is missed, donors can cancel
     and refund the remaining escrow.
 
@@ -74,11 +77,11 @@ flowchart TD
     Frontend -->|"photo + location + timestamp"| Oracle["Vercel API: /api/analyze"]
     Oracle -->|"vision check"| OpenAI["OpenAI vision model"]
     OpenAI -->|"APPROVE or REJECT"| Oracle
-    Oracle -->|"oracleApprove or oracleReject"| Campaign
+    Oracle -->|"AI review + reason"| Campaign
 
-    Campaign -->|"24-hour veto window"| Donor
+    Campaign -->|"24-hour review window"| Donor
     Donor -->|"optional veto vote"| Campaign
-    Campaign -->|"release if no majority veto"| NGO
+    Campaign -->|"finalize AI result after 24h"| NGO
     Campaign -->|"cancel/refund if stalled"| Donor
 ```
 
@@ -139,10 +142,10 @@ Fundraising -> Active -> Completed
 Milestone states:
 
 ```txt
-Pending -> Submitted -> InVeto -> Approved
-                    |
-                    v
-                 Rejected
+Pending -> Submitted -> 24h Review -> Approved
+                              |
+                              v
+                           Rejected
 ```
 
 Important contract actions:
@@ -152,10 +155,11 @@ Important contract actions:
 | `donate()` | Donor | Sends ETH into escrow. |
 | `startCampaign()` | NGO | Starts the campaign and releases bootstrap funds. |
 | `submitMilestone()` | NGO | Records evidence metadata and marks the milestone submitted. |
-| `oracleApproveMilestone()` | Oracle wallet | Opens the 24-hour veto window. |
-| `oracleRejectMilestone()` | Oracle wallet | Rejects weak evidence. |
-| `vetoMilestone()` | Donor | Casts a no vote during the veto window. |
-| `executeMilestone()` | Anyone | Releases funds after the veto window if no majority veto happened. |
+| `oracleReviewMilestone()` | Oracle wallet | Stores the AI recommendation and opens the 24-hour review window. |
+| `oracleApproveMilestone()` | Oracle wallet | Legacy helper for approval review. |
+| `oracleRejectMilestone()` | Oracle wallet | Legacy helper for rejection review. |
+| `vetoMilestone()` | Donor | Casts a no vote during the review window. |
+| `executeMilestone()` | Anyone | Finalizes the AI result after 24 hours. Approval releases funds; rejection locks the milestone for resubmission. |
 | `cancelStalledCampaign()` | Anyone | Cancels when the active milestone deadline is missed. |
 | `refund()` | Donor | Claims the donor's share of remaining escrow after cancellation/fundraising failure. |
 
@@ -163,10 +167,10 @@ Important contract actions:
 
 The veto system is intentionally low-friction:
 
-- Donors only act when they disagree with the AI approval.
-- Not voting counts as yes after the 24-hour window.
-- A milestone is rejected only when no votes become a strict majority of donors.
-- If no majority veto happens, the milestone can be executed and funds release.
+- Donors only act when they disagree with the AI recommendation.
+- Not voting accepts the AI recommendation after the 24-hour window.
+- A donor override happens only when veto votes become a strict majority of donors.
+- If no majority veto happens, the AI recommendation becomes final.
 - If a majority veto happens, funds stay locked and the NGO must resubmit before
   the milestone deadline.
 
@@ -184,7 +188,7 @@ evidence. The intended evidence flow is:
 
 Important security note: browser camera and geolocation reduce lazy fraud, but
 they are not perfect proof of reality. That is why ClearFund keeps the donor
-veto window as a human review layer after AI approval.
+review window as a human layer after every AI recommendation.
 
 ## Deployed Sepolia Factories
 
@@ -194,7 +198,7 @@ incompatible oracle contracts.
 
 ```txt
 Current factory:
-0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
+0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2
 
 Urban Oasis fallback:
 0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
@@ -239,7 +243,7 @@ Client-side variables:
 
 ```txt
 VITE_WALLETCONNECT_PROJECT_ID=your_reown_or_walletconnect_project_id
-VITE_FACTORY_ADDRESS=0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
+VITE_FACTORY_ADDRESS=0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2
 VITE_FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
 VITE_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 ```
@@ -250,7 +254,7 @@ Server-side variables for `frontend/api/analyze.js`:
 OPENAI_API_KEY=your_openai_key
 PRIVATE_KEY=oracle_wallet_private_key
 SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-FACTORY_ADDRESS=0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
+FACTORY_ADDRESS=0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2
 FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
 ```
 

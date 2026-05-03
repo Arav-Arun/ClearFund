@@ -2,8 +2,7 @@ import { ethers } from "ethers";
 import OpenAI from "openai";
 
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
-const FACTORY_ADDRESS =
-  process.env.FACTORY_ADDRESS || "0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398";
+const ACTIVE_FACTORY_ADDRESS = "0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2";
 const LEGACY_FACTORY_ADDRESSES = [
   "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
 ];
@@ -11,8 +10,17 @@ const BLOCKED_FACTORY_ADDRESSES = new Set([
   // Older demo factory uses incompatible campaign/oracle contracts.
   "0x6a837595e2592d699d48eb2dacf47df9493035d2",
 ]);
+const SUPERSEDED_FACTORY_ADDRESSES = new Set([
+  // These factories deployed campaigns before AI rejection had a 24-hour review.
+  "0x9f2f3aef7960ebf8f578d7174fb8f3135394b398",
+]);
+const configuredFactory = (process.env.FACTORY_ADDRESS || ACTIVE_FACTORY_ADDRESS).trim();
+const FACTORY_ADDRESS = ethers.isAddress(configuredFactory) && !SUPERSEDED_FACTORY_ADDRESSES.has(configuredFactory.toLowerCase())
+  ? configuredFactory
+  : ACTIVE_FACTORY_ADDRESS;
 const FACTORY_ADDRESSES = [
   FACTORY_ADDRESS,
+  ACTIVE_FACTORY_ADDRESS,
   ...(process.env.FACTORY_ADDRESSES?.split(",") || LEGACY_FACTORY_ADDRESSES),
 ].map((address) => address.trim()).filter((address) => {
   return ethers.isAddress(address) && !BLOCKED_FACTORY_ADDRESSES.has(address.toLowerCase());
@@ -21,9 +29,10 @@ const FACTORY_ADDRESSES = [
 const FACTORY_ABI = ["function getAllCampaigns() view returns (address[])"];
 
 const CAMPAIGN_ABI = [
+  "function oracleReviewMilestone(uint256,bool,string) external",
   "function oracleApproveMilestone(uint256) external",
-  "function oracleRejectMilestone(uint256) external",
-  "function getMilestone(uint256) view returns (tuple(string title, string description, uint256 fundPercent, uint256 deadline, uint8 status, string evidenceUrl, uint256 vetoEndsAt))"
+  "function getAIReview(uint256) view returns (tuple(bool exists, bool approved, string summary, uint256 reviewedAt))",
+  "function getMilestone(uint256) view returns (tuple(string title, string description, uint256 fundPercent, uint256 deadline, uint8 status, string evidenceUrl, uint256 vetoEndsAt))",
 ];
 
 const MILESTONE_STATUS = {
@@ -54,6 +63,42 @@ function cleanOracleError(error) {
   }
 
   return "Oracle request failed.";
+}
+
+function parseReview(raw) {
+  try {
+    const parsed = JSON.parse(raw || "{}");
+    const decision = String(parsed.decision || "").toUpperCase();
+    const observations = String(parsed.observations || "").replace(/[^\x20-\x7E\n]/g, "").trim();
+    const reason = String(parsed.reason || "").replace(/[^\x20-\x7E\n]/g, "").trim();
+
+    if (decision !== "APPROVE" && decision !== "REJECT") {
+      throw new Error("Invalid decision");
+    }
+
+    return {
+      approved: decision === "APPROVE",
+      decision,
+      summary: `Observed: ${observations || "No clear visual evidence."}\nReason: ${reason || "The evidence was not strong enough."}`.slice(0, 680),
+    };
+  } catch {
+    return {
+      approved: false,
+      decision: "REJECT",
+      summary: "Observed: The oracle response could not be parsed.\nReason: The evidence was rejected because the AI review was inconclusive.",
+    };
+  }
+}
+
+async function supportsAIReview(provider, campaignAddress) {
+  const data = new ethers.Interface(CAMPAIGN_ABI).encodeFunctionData("getAIReview", [0]);
+
+  try {
+    await provider.call({ to: campaignAddress, data });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForSubmittedMilestone(contract, milestoneId) {
@@ -152,7 +197,7 @@ export default async function handler(req, res) {
       messages: [
         {
           role: "system",
-          content: "You are an AI Oracle for a decentralized charity fund. Verify whether this fresh browser-camera photo, captured at the provided GPS location, reasonably proves the NGO completed the milestone. Reject screenshots, edited images, irrelevant scenes, or weak evidence. Reply ONLY with APPROVE or REJECT."
+          content: "You are an AI Oracle for a decentralized charity fund. Verify whether this fresh browser-camera photo, captured at the provided GPS location, reasonably proves the NGO completed the milestone. Reject screenshots, edited images, irrelevant scenes, or weak evidence. Reply only as JSON with keys decision, observations, and reason. decision must be APPROVE or REJECT."
         },
         {
           role: "user",
@@ -162,20 +207,45 @@ export default async function handler(req, res) {
           ]
         }
       ],
-      max_tokens: 10,
+      response_format: { type: "json_object" },
+      max_tokens: 220,
     });
 
-    const decision = response.choices[0].message.content?.trim().toUpperCase() || "REJECT";
+    const review = parseReview(response.choices[0].message.content);
+    const supportsReview = await supportsAIReview(provider, campaignAddress);
 
-    if (decision === "APPROVE") {
+    if (supportsReview) {
+      const tx = await contract.oracleReviewMilestone(milestoneId, review.approved, review.summary);
+      await tx.wait();
+      return res.status(200).json({
+        status: "24-hour review window opened",
+        decision: review.decision,
+        summary: review.summary,
+        txHash: tx.hash,
+        chainUpdated: true,
+      });
+    }
+
+    if (review.approved) {
       const tx = await contract.oracleApproveMilestone(milestoneId);
       await tx.wait();
-      return res.status(200).json({ status: "Approved", txHash: tx.hash });
-    } else {
-      const tx = await contract.oracleRejectMilestone(milestoneId);
-      await tx.wait();
-      return res.status(200).json({ status: "Rejected", txHash: tx.hash });
+      return res.status(200).json({
+        status: "24-hour review window opened",
+        decision: review.decision,
+        summary: review.summary,
+        txHash: tx.hash,
+        chainUpdated: true,
+        warning: "This legacy campaign cannot store the AI explanation on-chain.",
+      });
     }
+
+    return res.status(200).json({
+      status: "AI recommends rejection",
+      decision: review.decision,
+      summary: review.summary,
+      chainUpdated: false,
+      warning: "This legacy campaign cannot run a 24-hour rejection review, so the oracle did not reject it on-chain.",
+    });
 
   } catch (error) {
     console.error("Oracle Error:", error);

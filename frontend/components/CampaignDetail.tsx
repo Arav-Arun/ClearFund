@@ -8,8 +8,13 @@ import {
   formatEth,
   useCampaign,
 } from "../blockchain";
-import type { WalletState } from "../blockchain";
+import type { AIReviewInfo, WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
+
+type OracleResult = AIReviewInfo & {
+  warning?: string;
+  chainUpdated?: boolean;
+};
 
 function statusTagClass(status: number) {
   if (status === 0) return "neo-tag-blue";
@@ -43,6 +48,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const [capturedAt, setCapturedAt] = useState<number | null>(null);
   const [openingCamera, setOpeningCamera] = useState(false);
   const [submittingMilestone, setSubmittingMilestone] = useState<number | null>(null);
+  const [oracleResults, setOracleResults] = useState<Record<number, OracleResult>>({});
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -71,7 +77,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const canStartCampaign = campaign.raisedAmount >= bootstrapTarget;
   const now = Math.floor(Date.now() / 1000);
   const nextMilestone = milestones.find((milestone) => milestone.id > 0 && milestone.status !== 3);
-  const canCancelStalled = campaign.status === 1 && !!nextMilestone?.deadline && nextMilestone.deadline < now;
+  const canCancelStalled = campaign.status === 1 && !!nextMilestone?.deadline && nextMilestone.deadline < now && (nextMilestone.status === 0 || nextMilestone.status === 4);
   const fundraisingFailed = campaign.status === 0 && campaign.campaignDeadline < now && campaign.raisedAmount < bootstrapTarget;
 
   const handleDonate = async (e: React.FormEvent) => {
@@ -223,8 +229,23 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     const result = await response.json().catch(() => ({ error: "Oracle request failed" }));
     if (!response.ok || result.error) throw new Error(result.error || "Request failed");
 
-    toast.success(`AI Oracle Decision: ${result.status}`, { id: "submit" });
-    clearEvidence();
+    if (result.summary && result.decision) {
+      setOracleResults((current) => ({
+        ...current,
+        [milestoneId]: {
+          exists: true,
+          approved: result.decision === "APPROVE",
+          summary: result.summary,
+          reviewedAt: Math.floor(Date.now() / 1000),
+          warning: result.warning,
+          chainUpdated: result.chainUpdated,
+        },
+      }));
+    }
+
+    toast.success(`AI Oracle: ${result.status}`, { id: "submit" });
+    if (result.warning) toast(result.warning);
+    if (result.chainUpdated !== false) clearEvidence();
   };
 
   const handleSubmitMilestone = async (milestoneId: number) => {
@@ -287,7 +308,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       const tx = await contract.vetoMilestone(milestoneId);
       toast.loading("Recording veto vote...", { id: "veto" });
       await tx.wait();
-      toast.success("Veto recorded. Rejection requires a donor majority.", { id: "veto" });
+      toast.success("No vote recorded. Final outcome still waits for 24 hours.", { id: "veto" });
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Veto failed", { id: "veto" });
@@ -300,9 +321,9 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.executeMilestone(milestoneId);
-      toast.loading("Releasing funds...", { id: "execute" });
+      toast.loading("Finalizing 24-hour review...", { id: "execute" });
       await tx.wait();
-      toast.success("Funds released!", { id: "execute" });
+      toast.success("Review finalized.", { id: "execute" });
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Execute failed", { id: "execute" });
@@ -389,118 +410,144 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
       <h2 className="section-title">Milestones</h2>
       <div className="flex flex-col gap-4">
-        {milestones.map((milestone) => (
-          <div key={milestone.id} className="neo-card milestone-card">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="font-bold">{milestone.title}</h3>
-              <span className={`neo-tag ${statusTagClass(milestone.status)}`}>
-                {MILESTONE_STATUS[milestone.status]}
-              </span>
-            </div>
-            
-            <p className="text-secondary text-sm mb-4">{milestone.description}</p>
-            
-            <div className="flex justify-between text-sm text-muted mb-4">
-              <span>Fund allocation: {milestone.fundPercent}%</span>
-              <span>
-                Deadline: {milestone.id === 0 ? "Released at start" : new Date(milestone.deadline * 1000).toLocaleDateString()}
-              </span>
-            </div>
+        {milestones.map((milestone) => {
+          const review = milestone.aiReview?.exists ? milestone.aiReview : oracleResults[milestone.id];
+          const canSubmitProof = isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 1 || milestone.status === 4);
 
-            {isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 1) && (
-              <div className="camera-box mt-4">
-                {evidenceMilestoneId === milestone.id && !evidenceImage && (
-                  <video ref={videoRef} className="camera-preview" playsInline muted autoPlay />
-                )}
+          return (
+            <div key={milestone.id} className="neo-card milestone-card">
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="font-bold">{milestone.title}</h3>
+                <span className={`neo-tag ${statusTagClass(milestone.status)}`}>
+                  {MILESTONE_STATUS[milestone.status]}
+                </span>
+              </div>
 
-                {evidenceMilestoneId === milestone.id && evidenceImage && (
-                  <img src={evidenceImage} alt="Live milestone evidence" className="camera-preview" />
-                )}
+              <p className="text-secondary text-sm mb-4">{milestone.description}</p>
 
-                <div className="flex gap-2 items-center">
-                  <button
-                    className="neo-btn neo-btn-outline"
-                    disabled={openingCamera || submittingMilestone === milestone.id}
-                    onClick={() => handleOpenCamera(milestone.id)}
-                  >
-                    {openingCamera && evidenceMilestoneId === milestone.id ? "Opening..." : "Open Live Camera"}
-                  </button>
+              <div className="flex justify-between text-sm text-muted mb-4">
+                <span>Fund allocation: {milestone.fundPercent}%</span>
+                <span>
+                  Deadline: {milestone.id === 0 ? "Released at start" : new Date(milestone.deadline * 1000).toLocaleDateString()}
+                </span>
+              </div>
 
-                  {evidenceMilestoneId === milestone.id && !evidenceImage && streamRef.current && (
-                    <button className="neo-btn neo-btn-primary" onClick={handleCapturePhoto}>
-                      Capture Photo
-                    </button>
+              {canSubmitProof && (
+                <div className="camera-box mt-4">
+                  {evidenceMilestoneId === milestone.id && !evidenceImage && (
+                    <video ref={videoRef} className="camera-preview" playsInline muted autoPlay />
                   )}
 
                   {evidenceMilestoneId === milestone.id && evidenceImage && (
+                    <img src={evidenceImage} alt="Live milestone evidence" className="camera-preview" />
+                  )}
+
+                  <div className="flex gap-2 items-center">
+                    <button
+                      className="neo-btn neo-btn-outline"
+                      disabled={openingCamera || submittingMilestone === milestone.id}
+                      onClick={() => handleOpenCamera(milestone.id)}
+                    >
+                      {openingCamera && evidenceMilestoneId === milestone.id ? "Opening..." : "Open Live Camera"}
+                    </button>
+
+                    {evidenceMilestoneId === milestone.id && !evidenceImage && streamRef.current && (
+                      <button className="neo-btn neo-btn-primary" onClick={handleCapturePhoto}>
+                        Capture Photo
+                      </button>
+                    )}
+
+                    {evidenceMilestoneId === milestone.id && evidenceImage && (
+                      <button
+                        className="neo-btn neo-btn-primary"
+                        disabled={submittingMilestone === milestone.id}
+                        onClick={() => milestone.status === 1 ? handleRetryOracle(milestone.id) : handleSubmitMilestone(milestone.id)}
+                      >
+                        {milestone.status === 1 ? "Retry AI Oracle" : "Submit Evidence"}
+                      </button>
+                    )}
+
+                    {evidenceMilestoneId === milestone.id && (
+                      <button className="neo-btn neo-btn-outline" onClick={clearEvidence}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {milestone.status === 1 && (
+                <div className="review-box mt-4">
+                  <p className="mb-2 text-sm font-bold" style={{ color: 'var(--warning)' }}>
+                    Proof is submitted on-chain. AI Oracle review is pending.
+                  </p>
+                  {review?.summary && (
+                    <p className="text-xs text-secondary whitespace-pre-line">{review.summary}</p>
+                  )}
+                  {isNgo && (
+                    <p className="text-xs text-secondary mt-2">
+                      If this stays here after an oracle error, capture a fresh live photo above and retry the AI Oracle.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {milestone.status === 2 && (
+                <div className="review-box mt-4">
+                  <p className="mb-2 text-sm font-bold" style={{ color: review ? (review.approved ? 'var(--success)' : 'var(--danger)') : 'var(--warning)' }}>
+                    {review ? `AI recommends ${review.approved ? "approval" : "rejection"}.` : "AI review recorded."} 24-hour donor review active.
+                  </p>
+                  {review?.summary && (
+                    <p className="text-xs mb-3 text-secondary whitespace-pre-line">{review.summary}</p>
+                  )}
+                  <p className="text-xs mb-4 text-secondary">
+                    Final outcome can be announced after {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}. Not voting accepts the AI recommendation. Veto votes recorded: {milestone.vetoVotes}/{milestone.donorCount || "?"}.
+                  </p>
+                  {(isDonor || isNgo) && (
+                    <div className="notice-box mb-4">
+                      {isNgo
+                        ? "Donors and the NGO should watch this review window. Nothing becomes final until the 24 hours finish."
+                        : "You are a donor. Vote no only if you want to block this milestone; doing nothing counts as yes."}
+                    </div>
+                  )}
+                  <div className="flex gap-4 mt-4">
+                    {isDonor && (
+                      <button
+                        className="neo-btn neo-btn-danger"
+                        disabled={milestone.hasVetoed || milestone.vetoEndsAt <= now}
+                        onClick={() => handleVeto(milestone.id)}
+                      >
+                        {milestone.hasVetoed ? "No Vote Recorded" : "Vote No / Veto"}
+                      </button>
+                    )}
                     <button
                       className="neo-btn neo-btn-primary"
-                      disabled={submittingMilestone === milestone.id}
-                      onClick={() => milestone.status === 1 ? handleRetryOracle(milestone.id) : handleSubmitMilestone(milestone.id)}
+                      disabled={milestone.vetoEndsAt > now}
+                      onClick={() => handleExecute(milestone.id)}
                     >
-                      {milestone.status === 1 ? "Retry AI Oracle" : "Submit Evidence"}
+                      {milestone.vetoEndsAt > now ? "Waiting for 24 Hours" : review?.approved === false ? "Finalize Rejection" : "Finalize / Release Funds"}
                     </button>
-                  )}
-
-                  {evidenceMilestoneId === milestone.id && (
-                    <button className="neo-btn neo-btn-outline" onClick={clearEvidence}>
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {milestone.status === 1 && (
-              <div className="mt-4 p-4 border-t-2" style={{ borderColor: 'var(--border)' }}>
-                <p className="mb-2 text-sm text-yellow-600 font-bold">
-                  Proof is submitted on-chain. AI Oracle review is pending.
-                </p>
-                {isNgo && (
-                  <p className="text-xs text-secondary">
-                    If this stays here after an oracle error, capture a fresh live photo above and retry the AI Oracle.
-                  </p>
-                )}
-              </div>
-            )}
-
-            {milestone.status === 2 && (
-              <div className="mt-4 p-4 border-t-2" style={{ borderColor: 'var(--border)' }}>
-                <p className="mb-2 text-sm font-bold" style={{ color: 'var(--success)' }}>
-                  AI Approved. 24-Hour Veto Window Active.
-                </p>
-                <p className="text-xs mb-4 text-secondary">
-                  No vote counts as yes. Veto votes: {milestone.vetoVotes}/{milestone.donorCount || "?"}. Ends at {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}.
-                </p>
-                {(isDonor || isNgo) && (
-                  <div className="notice-box mb-4">
-                    {isNgo
-                      ? "Donors and the NGO should watch this 24-hour review window. Funds release if veto votes do not reach a majority."
-                      : "You are a donor on this campaign. Only vote if you want to block this milestone; doing nothing counts as yes."}
                   </div>
-                )}
-                <div className="flex gap-4 mt-4">
-                  {isDonor && (
-                    <button
-                      className="neo-btn neo-btn-danger"
-                      disabled={milestone.hasVetoed || milestone.vetoEndsAt <= now}
-                      onClick={() => handleVeto(milestone.id)}
-                    >
-                      {milestone.hasVetoed ? "Veto Recorded" : "Veto Milestone"}
-                    </button>
-                  )}
-                  <button
-                    className="neo-btn neo-btn-primary"
-                    disabled={milestone.vetoEndsAt > now}
-                    onClick={() => handleExecute(milestone.id)}
-                  >
-                    {milestone.vetoEndsAt > now ? "Waiting for Veto Window" : "Release Funds"}
-                  </button>
                 </div>
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+
+              {milestone.status === 4 && (
+                <div className="review-box mt-4">
+                  <p className="mb-2 text-sm font-bold" style={{ color: 'var(--danger)' }}>
+                    Final outcome: rejected.
+                  </p>
+                  {review?.summary ? (
+                    <p className="text-xs text-secondary whitespace-pre-line">{review.summary}</p>
+                  ) : (
+                    <p className="text-xs text-secondary">
+                      This older campaign was rejected by a legacy oracle contract that did not save the AI explanation or wait through the new 24-hour rejection review. The NGO can submit fresh live evidence before the deadline.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -67,8 +67,8 @@ export default function Home({ wallet }: { wallet: WalletState }) {
             <span className="how-number">2</span>
             <h3 className="font-bold text-xl mb-3">2. Verify</h3>
             <p className="text-secondary">
-              The NGO uploads progress evidence. ClearFund checks the proof 
-              with an AI Oracle and a public veto window.
+              The NGO captures live progress evidence. ClearFund checks the proof
+              with an AI Oracle and a public review window.
             </p>
           </div>
           <div className="how-card">

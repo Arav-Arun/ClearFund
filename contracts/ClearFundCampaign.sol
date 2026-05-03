@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 /// @title ClearFundCampaign — AI Oracle Verification with Veto
 /// @author Arav Arun
-/// @notice Escrows ETH. Milestones are verified by an AI Oracle, followed by a 24-hour donor veto window.
+/// @notice Escrows ETH. Milestones are verified by an AI Oracle, followed by a 24-hour donor review window.
 contract ClearFundCampaign {
     enum CampaignStatus { Fundraising, Active, Completed, Cancelled }
     enum MilestoneStatus { Pending, Submitted, InVeto, Approved, Rejected }
@@ -16,6 +16,13 @@ contract ClearFundCampaign {
         MilestoneStatus status;
         string evidenceUrl;
         uint256 vetoEndsAt;
+    }
+
+    struct AIReview {
+        bool exists;
+        bool approved;
+        string summary;
+        uint256 reviewedAt;
     }
 
     struct CampaignView {
@@ -59,16 +66,19 @@ contract ClearFundCampaign {
     mapping(uint256 => uint256) public vetoVotes;
     mapping(uint256 => uint256) public vetoRounds;
     mapping(uint256 => mapping(address => uint256)) public lastVetoRound;
+    mapping(uint256 => AIReview) private aiReviews;
 
     event DonationReceived(address indexed donor, uint256 amount);
     event BootstrapReleased(uint256 amount);
     event CampaignStarted();
     event MilestoneSubmitted(uint256 indexed milestoneId, string evidenceUrl);
     event OracleDecision(uint256 indexed milestoneId, bool approved);
+    event OracleReview(uint256 indexed milestoneId, bool approved, string summary);
     event VetoWindowOpened(uint256 indexed milestoneId, uint256 vetoEndsAt, address ngo, uint256 donorCount);
     event VetoCast(address indexed voter, uint256 indexed milestoneId);
     event VetoMajorityReached(uint256 indexed milestoneId, uint256 vetoVotes, uint256 donorCount);
     event FundsReleased(uint256 indexed milestoneId, uint256 amount);
+    event MilestoneRejected(uint256 indexed milestoneId, string reason);
     event CampaignCancelled();
     event RefundIssued(address indexed donor, uint256 amount);
 
@@ -204,30 +214,39 @@ contract ClearFundCampaign {
         
         m.evidenceUrl = evidenceUrl;
         m.status = MilestoneStatus.Submitted;
+        m.vetoEndsAt = 0;
+        delete aiReviews[milestoneId];
 
         emit MilestoneSubmitted(milestoneId, evidenceUrl);
     }
 
     // ORACLE FUNCTIONS
+    function oracleReviewMilestone(uint256 milestoneId, bool approved, string calldata summary) external onlyOracle inStatus(CampaignStatus.Active) {
+        _openReview(milestoneId, approved, summary);
+    }
+
     function oracleApproveMilestone(uint256 milestoneId) external onlyOracle inStatus(CampaignStatus.Active) {
+        _openReview(milestoneId, true, "AI recommends approval.");
+    }
+
+    function oracleRejectMilestone(uint256 milestoneId) external onlyOracle inStatus(CampaignStatus.Active) {
+        _openReview(milestoneId, false, "AI recommends rejection.");
+    }
+
+    function _openReview(uint256 milestoneId, bool approved, string memory summary) internal {
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.Submitted, "Campaign: not submitted");
+        require(bytes(summary).length > 0 && bytes(summary).length <= 700, "Campaign: invalid review");
 
+        aiReviews[milestoneId] = AIReview(true, approved, summary, block.timestamp);
         m.status = MilestoneStatus.InVeto;
         m.vetoEndsAt = block.timestamp + 24 hours;
         vetoVotes[milestoneId] = 0;
         vetoRounds[milestoneId] += 1;
 
-        emit OracleDecision(milestoneId, true);
+        emit OracleDecision(milestoneId, approved);
+        emit OracleReview(milestoneId, approved, summary);
         emit VetoWindowOpened(milestoneId, m.vetoEndsAt, ngoAddress, donorList.length);
-    }
-
-    function oracleRejectMilestone(uint256 milestoneId) external onlyOracle inStatus(CampaignStatus.Active) {
-        Milestone storage m = milestones[milestoneId];
-        require(m.status == MilestoneStatus.Submitted, "Campaign: not submitted");
-
-        m.status = MilestoneStatus.Rejected;
-        emit OracleDecision(milestoneId, false);
     }
 
     // DONOR VETO
@@ -240,19 +259,28 @@ contract ClearFundCampaign {
         lastVetoRound[milestoneId][msg.sender] = vetoRounds[milestoneId];
         vetoVotes[milestoneId] += 1;
         emit VetoCast(msg.sender, milestoneId);
-
-        if (vetoVotes[milestoneId] > donorList.length / 2) {
-            m.status = MilestoneStatus.Rejected;
-            emit VetoMajorityReached(milestoneId, vetoVotes[milestoneId], donorList.length);
-        }
     }
 
     // EXECUTE
     function executeMilestone(uint256 milestoneId) external nonReentrant inStatus(CampaignStatus.Active) {
         Milestone storage m = milestones[milestoneId];
+        AIReview storage review = aiReviews[milestoneId];
         require(m.status == MilestoneStatus.InVeto, "Campaign: not in veto phase");
+        require(review.exists, "Campaign: AI review missing");
         require(block.timestamp > m.vetoEndsAt, "Campaign: veto period active");
-        require(vetoVotes[milestoneId] <= donorList.length / 2, "Campaign: veto majority reached");
+
+        if (vetoVotes[milestoneId] > donorList.length / 2) {
+            m.status = MilestoneStatus.Rejected;
+            emit VetoMajorityReached(milestoneId, vetoVotes[milestoneId], donorList.length);
+            emit MilestoneRejected(milestoneId, "Donor majority veto");
+            return;
+        }
+
+        if (!review.approved) {
+            m.status = MilestoneStatus.Rejected;
+            emit MilestoneRejected(milestoneId, "AI recommended rejection");
+            return;
+        }
 
         _releaseMilestoneFunds(milestoneId);
     }
@@ -362,6 +390,10 @@ contract ClearFundCampaign {
         Milestone storage m = milestones[milestoneId];
         bool voterVetoed = vetoRounds[milestoneId] > 0 && lastVetoRound[milestoneId][voter] == vetoRounds[milestoneId];
         return (donorList.length, vetoVotes[milestoneId], voterVetoed, m.vetoEndsAt);
+    }
+
+    function getAIReview(uint256 milestoneId) external view returns (AIReview memory) {
+        return aiReviews[milestoneId];
     }
 
     receive() external payable {}

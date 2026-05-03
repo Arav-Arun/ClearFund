@@ -6,28 +6,45 @@ import { useAccount, useDisconnect, useSwitchChain, useWalletClient } from "wagm
 import { sepolia } from "wagmi/chains";
 
 const env = import.meta.env;
-
-export const FACTORY_ADDRESS = (
-  env.VITE_FACTORY_ADDRESS ||
-  "0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398"
-).trim();
+const ACTIVE_FACTORY_ADDRESS = "0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2";
 
 const LEGACY_FACTORY_ADDRESSES = [
   "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
 ];
 
+const BLOCKED_FACTORY_ADDRESSES = new Set([
+  // Older demo factory uses incompatible campaign/oracle contracts.
+  "0x6a837595e2592d699d48eb2dacf47df9493035d2",
+]);
+
+const SUPERSEDED_FACTORY_ADDRESSES = new Set([
+  // These factories deployed campaigns before AI rejection had a 24-hour review.
+  "0x9f2f3aef7960ebf8f578d7174fb8f3135394b398",
+  "0x412a33fbcaa3ac0f6e5a0255f9779aab8e8e1470",
+]);
+
+function factoryForCreation(address: string) {
+  const trimmed = address.trim();
+  const key = trimmed.toLowerCase();
+
+  if (!ethers.isAddress(trimmed)) return ACTIVE_FACTORY_ADDRESS;
+  if (BLOCKED_FACTORY_ADDRESSES.has(key) || SUPERSEDED_FACTORY_ADDRESSES.has(key)) {
+    return ACTIVE_FACTORY_ADDRESS;
+  }
+
+  return trimmed;
+}
+
+export const FACTORY_ADDRESS = factoryForCreation(env.VITE_FACTORY_ADDRESS || ACTIVE_FACTORY_ADDRESS);
+
 function uniqueAddresses(addresses: string[]) {
   const seen = new Set<string>();
-  const blocked = new Set([
-    // Older demo factory uses incompatible campaign/oracle contracts.
-    "0x6a837595e2592d699d48eb2dacf47df9493035d2",
-  ]);
 
   return addresses.map((address) => address.trim()).filter((address) => {
     if (!ethers.isAddress(address)) return false;
 
     const key = address.toLowerCase();
-    if (blocked.has(key)) return false;
+    if (BLOCKED_FACTORY_ADDRESSES.has(key)) return false;
     if (seen.has(key)) return false;
 
     seen.add(key);
@@ -37,6 +54,7 @@ function uniqueAddresses(addresses: string[]) {
 
 export const FACTORY_ADDRESSES = uniqueAddresses([
   FACTORY_ADDRESS,
+  ACTIVE_FACTORY_ADDRESS,
   ...(env.VITE_FACTORY_ADDRESSES?.split(",") || LEGACY_FACTORY_ADDRESSES),
 ]);
 
@@ -65,7 +83,7 @@ export const CAMPAIGN_STATUS = [
 export const MILESTONE_STATUS = [
   "Pending",
   "Submitted",
-  "In Veto",
+  "24h Review",
   "Approved",
   "Rejected",
 ] as const;
@@ -127,12 +145,14 @@ export const CAMPAIGN_ABI = [
   )`,
   "function getDonation(address) view returns (uint256)",
   "function getDonors() view returns (address[])",
+  "function getAIReview(uint256) view returns (tuple(bool exists,bool approved,string summary,uint256 reviewedAt))",
   "function getVetoInfo(uint256,address) view returns (uint256 donorCount,uint256 currentVetoVotes,bool voterHasVetoed,uint256 vetoEndsAt)",
   "function donations(address) view returns (uint256)",
   "event DonationReceived(address indexed, uint256)",
   "event CampaignStarted()",
   "event MilestoneSubmitted(uint256 indexed, string)",
   "event OracleDecision(uint256 indexed, bool)",
+  "event OracleReview(uint256 indexed, bool, string)",
   "event VetoWindowOpened(uint256 indexed, uint256, address, uint256)",
   "event VetoCast(address indexed, uint256 indexed)",
   "event VetoMajorityReached(uint256 indexed, uint256, uint256)",
@@ -169,6 +189,14 @@ export interface MilestoneInfo {
   donorCount: number;
   vetoVotes: number;
   hasVetoed: boolean;
+  aiReview?: AIReviewInfo;
+}
+
+export interface AIReviewInfo {
+  exists: boolean;
+  approved: boolean;
+  summary: string;
+  reviewedAt: number;
 }
 
 export interface WalletState {
@@ -212,6 +240,13 @@ type VetoRow = {
   currentVetoVotes: bigint;
   voterHasVetoed: boolean;
   vetoEndsAt: bigint;
+};
+
+type AIReviewRow = {
+  exists: boolean;
+  approved: boolean;
+  summary: string;
+  reviewedAt: bigint;
 };
 
 export const wagmiConfig = getDefaultConfig({
@@ -426,6 +461,19 @@ export function useCampaign(
               // Older deployed campaigns do not expose getVetoInfo yet.
             }
 
+            let aiReview: AIReviewInfo | undefined;
+            try {
+              const review: AIReviewRow = await contract.getAIReview(id);
+              aiReview = {
+                exists: review.exists,
+                approved: review.approved,
+                summary: review.summary,
+                reviewedAt: Number(review.reviewedAt),
+              };
+            } catch {
+              // Older deployed campaigns do not store AI review summaries.
+            }
+
             return {
               id,
               title: milestone.title,
@@ -438,6 +486,7 @@ export function useCampaign(
               donorCount: Number(vetoInfo.donorCount),
               vetoVotes: Number(vetoInfo.currentVetoVotes),
               hasVetoed: vetoInfo.voterHasVetoed,
+              aiReview,
             };
           })
         )

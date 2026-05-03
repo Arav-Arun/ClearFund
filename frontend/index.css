@@ -16,6 +16,7 @@
   --danger:          #e74c3c;
   --danger-hover:    #c0392b;
   --success:         #34d399;
+  --warning:         #fbbf24;
 
   /* ── Text ── */
   --text:            #e8eaed;
@@ -497,6 +498,12 @@ label {
   font-size: 13px;
 }
 
+.review-box {
+  border-top: 2px solid var(--border);
+  padding-top: 16px;
+  font-size: 13px;
+}
+
 .camera-box {
   display: grid;
   gap: 12px;
@@ -597,6 +604,7 @@ label {
 .text-secondary { color: var(--text-secondary); }
 .text-accent { color: var(--accent); }
 .text-yellow-600 { color: #fbbf24; }
+.whitespace-pre-line { white-space: pre-line; }
 .text-center { text-align: center; }
 .text-right { text-align: right; }
 
