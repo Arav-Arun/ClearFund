@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ethers } from "ethers";
 import {
@@ -18,12 +18,13 @@ function statusTagClass(status: number) {
   return "neo-tag-red";
 }
 
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Could not read evidence image."));
-    reader.readAsDataURL(file);
+function getLiveLocation() {
+  return new Promise<GeolocationPosition>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 15000,
+    });
   });
 }
 
@@ -34,33 +35,27 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const [donateAmount, setDonateAmount] = useState("");
   const [isDonating, setIsDonating] = useState(false);
 
-  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [evidenceImage, setEvidenceImage] = useState("");
   const [evidenceMilestoneId, setEvidenceMilestoneId] = useState<number | null>(null);
-  const [locationStr, setLocationStr] = useState<string>("");
+  const [locationStr, setLocationStr] = useState("");
+  const [capturedAt, setCapturedAt] = useState<number | null>(null);
+  const [openingCamera, setOpeningCamera] = useState(false);
   const [submittingMilestone, setSubmittingMilestone] = useState<number | null>(null);
 
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  };
+
   useEffect(() => {
-    if (evidenceFile && !locationStr) {
-      if (navigator.geolocation) {
-        toast.loading("Fetching live location...", { id: "geo" });
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            setLocationStr(`${position.coords.latitude},${position.coords.longitude}`);
-            toast.success("Location captured", { id: "geo" });
-          },
-          (_error) => {
-            toast.error("Failed to get location. It is required.", { id: "geo" });
-            setEvidenceFile(null);
-            setEvidenceMilestoneId(null);
-          }
-        );
-      } else {
-        toast.error("Geolocation is not supported by this browser.");
-        setEvidenceFile(null);
-        setEvidenceMilestoneId(null);
-      }
-    }
-  }, [evidenceFile, locationStr]);
+    if (!videoRef.current || !streamRef.current) return;
+    videoRef.current.srcObject = streamRef.current;
+    videoRef.current.play().catch(() => toast.error("Camera preview could not start."));
+  }, [evidenceMilestoneId]);
+
+  useEffect(() => stopCamera, []);
 
   if (loading) {
     return <div className="page-container"><div className="empty-state">Loading campaign...</div></div>;
@@ -147,15 +142,77 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     }
   };
 
+  const handleOpenCamera = async (milestoneId: number) => {
+    if (!navigator.mediaDevices?.getUserMedia) return toast.error("Camera is not supported by this browser.");
+    if (!navigator.geolocation) return toast.error("Location permission is not supported by this browser.");
+
+    try {
+      setOpeningCamera(true);
+      toast.loading("Allow camera and location...", { id: "capture" });
+
+      const [stream, position] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: "environment" } },
+        }),
+        getLiveLocation(),
+      ]);
+
+      stopCamera();
+      streamRef.current = stream;
+      setEvidenceImage("");
+      setCapturedAt(null);
+      setEvidenceMilestoneId(milestoneId);
+      setLocationStr(`${position.coords.latitude},${position.coords.longitude}`);
+      toast.success("Live camera and location ready.", { id: "capture" });
+    } catch {
+      stopCamera();
+      setEvidenceMilestoneId(null);
+      setLocationStr("");
+      toast.error("Camera and live location are required.", { id: "capture" });
+    } finally {
+      setOpeningCamera(false);
+    }
+  };
+
+  const handleCapturePhoto = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !locationStr) return toast.error("Camera and location are not ready.");
+
+    const width = Math.min(video.videoWidth, 1280);
+    const height = Math.round((video.videoHeight * width) / video.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return toast.error("Could not capture photo.");
+    context.drawImage(video, 0, 0, width, height);
+
+    setEvidenceImage(canvas.toDataURL("image/jpeg", 0.82));
+    setCapturedAt(Date.now());
+    stopCamera();
+    toast.success("Live evidence captured.");
+  };
+
+  const clearEvidence = () => {
+    stopCamera();
+    setEvidenceImage("");
+    setCapturedAt(null);
+    setEvidenceMilestoneId(null);
+    setLocationStr("");
+  };
+
   const handleSubmitMilestone = async (milestoneId: number) => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
     if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
-    if (!evidenceFile || !locationStr) return toast.error("Live photo and location required");
+    if (!evidenceImage || !capturedAt || !locationStr || evidenceMilestoneId !== milestoneId) {
+      return toast.error("Live camera photo and location required");
+    }
 
     try {
       setSubmittingMilestone(milestoneId);
       
-      const simulatedUploadUrl = `ipfs://live-capture-${Date.now()}`;
+      const simulatedUploadUrl = `live-camera:${capturedAt}`;
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.submitMilestone(milestoneId, simulatedUploadUrl);
       
@@ -163,15 +220,15 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       await tx.wait();
       toast.success("Submitted on-chain! Sending to AI Oracle...", { id: "submit" });
       
-      const base64Image = await readFileAsDataUrl(evidenceFile);
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           campaignAddress: address,
           milestoneId,
-          imageB64: base64Image,
+          imageB64: evidenceImage,
           locationStr,
+          capturedAt,
         }),
       });
 
@@ -183,9 +240,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       }
       refetch();
 
-      setEvidenceFile(null);
-      setEvidenceMilestoneId(null);
-      setLocationStr("");
+      clearEvidence();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to submit", { id: "submit" });
     } finally {
@@ -321,30 +376,46 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             </div>
 
             {isNgo && milestone.id > 0 && milestone.status === 0 && (
-              <div className="flex gap-2 mt-4 items-center">
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="neo-input flex-1"
-                  onChange={(e) => {
-                    setEvidenceFile(e.target.files?.[0] || null);
-                    setEvidenceMilestoneId(e.target.files?.[0] ? milestone.id : null);
-                    setLocationStr("");
-                  }}
-                />
-                <button
-                  className="neo-btn neo-btn-primary"
-                  disabled={
-                    submittingMilestone === milestone.id ||
-                    !evidenceFile ||
-                    !locationStr ||
-                    evidenceMilestoneId !== milestone.id
-                  }
-                  onClick={() => handleSubmitMilestone(milestone.id)}
-                >
-                  Submit Live Evidence
-                </button>
+              <div className="camera-box mt-4">
+                {evidenceMilestoneId === milestone.id && !evidenceImage && (
+                  <video ref={videoRef} className="camera-preview" playsInline muted autoPlay />
+                )}
+
+                {evidenceMilestoneId === milestone.id && evidenceImage && (
+                  <img src={evidenceImage} alt="Live milestone evidence" className="camera-preview" />
+                )}
+
+                <div className="flex gap-2 items-center">
+                  <button
+                    className="neo-btn neo-btn-outline"
+                    disabled={openingCamera || submittingMilestone === milestone.id}
+                    onClick={() => handleOpenCamera(milestone.id)}
+                  >
+                    {openingCamera && evidenceMilestoneId === milestone.id ? "Opening..." : "Open Live Camera"}
+                  </button>
+
+                  {evidenceMilestoneId === milestone.id && !evidenceImage && streamRef.current && (
+                    <button className="neo-btn neo-btn-primary" onClick={handleCapturePhoto}>
+                      Capture Photo
+                    </button>
+                  )}
+
+                  {evidenceMilestoneId === milestone.id && evidenceImage && (
+                    <button
+                      className="neo-btn neo-btn-primary"
+                      disabled={submittingMilestone === milestone.id}
+                      onClick={() => handleSubmitMilestone(milestone.id)}
+                    >
+                      Submit Evidence
+                    </button>
+                  )}
+
+                  {evidenceMilestoneId === milestone.id && (
+                    <button className="neo-btn neo-btn-outline" onClick={clearEvidence}>
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 

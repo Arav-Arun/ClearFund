@@ -251,6 +251,7 @@ contract ClearFundCampaign {
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.InVeto, "Campaign: not in veto phase");
         require(block.timestamp > m.vetoEndsAt, "Campaign: veto period active");
+        require(vetoVotes[milestoneId] <= donorList.length / 2, "Campaign: veto majority reached");
 
         _releaseMilestoneFunds(milestoneId);
     }

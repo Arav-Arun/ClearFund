@@ -488,6 +488,20 @@ label {
   font-size: 13px;
 }
 
+.camera-box {
+  display: grid;
+  gap: 12px;
+}
+
+.camera-preview {
+  width: 100%;
+  max-height: 360px;
+  object-fit: cover;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
 /* ═══════════════════════════════════════════════
    FOOTER
    ═══════════════════════════════════════════════ */

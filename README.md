@@ -64,6 +64,9 @@ Do not commit `.env`.
 ## Oracle API
 
 The Vercel API route lives at `frontend/api/analyze.js`.
+Milestone evidence is captured from the browser camera only. The app also asks
+for live location permission; there is no file upload or manual location input.
+The oracle rejects stale captures before calling the model.
 
 Required server environment variables:
 
@@ -110,8 +113,10 @@ Legacy factory read fallback: 0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
 
 Veto logic: donors may cast veto votes during the 24-hour review window. A
-milestone is rejected only if veto votes become a strict donor majority; donors
-who do not vote are counted as yes after the window.
+milestone is rejected and funds stay frozen only if veto votes become a strict
+donor majority; donors who do not vote are counted as yes after the window. If
+the NGO misses the active milestone deadline, donors can cancel and claim
+refunds from the remaining escrow.
 
 Sepolia Etherscan:
 

@@ -24,7 +24,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { campaignAddress, milestoneId, imageB64, locationStr } = req.body;
+    const { campaignAddress, milestoneId, imageB64, locationStr, capturedAt } = req.body;
     const apiKey = process.env.OPENAI_API_KEY;
     const privateKey = process.env.PRIVATE_KEY;
 
@@ -40,12 +40,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Invalid milestone id." });
     }
 
-    if (typeof imageB64 !== "string" || !imageB64.startsWith("data:image/")) {
-      return res.status(400).json({ error: "Image evidence is required." });
+    if (typeof imageB64 !== "string" || !imageB64.startsWith("data:image/jpeg;base64,")) {
+      return res.status(400).json({ error: "Live camera photo is required." });
     }
 
     if (imageB64.length > 5_000_000) {
       return res.status(413).json({ error: "Image is too large." });
+    }
+
+    if (!Number.isInteger(capturedAt) || Math.abs(Date.now() - capturedAt) > 5 * 60 * 1000) {
+      return res.status(400).json({ error: "Evidence capture is stale." });
     }
 
     if (typeof locationStr !== "string" || !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(locationStr)) {
@@ -85,12 +89,12 @@ export default async function handler(req, res) {
       messages: [
         {
           role: "system",
-          content: "You are an AI Oracle for a decentralized charity fund. Your job is to verify if the provided photo (taken at the provided GPS location) proves that the NGO has completed their milestone. Reply ONLY with 'APPROVE' if it looks legitimate, or 'REJECT' if it looks fake, irrelevant, or fails to meet the description."
+          content: "You are an AI Oracle for a decentralized charity fund. Verify whether this fresh browser-camera photo, captured at the provided GPS location, reasonably proves the NGO completed the milestone. Reject screenshots, edited images, irrelevant scenes, or weak evidence. Reply ONLY with APPROVE or REJECT."
         },
         {
           role: "user",
           content: [
-            { type: "text", text: `Milestone Description: ${milestone.description}\nLocation: ${locationStr}` },
+            { type: "text", text: `Milestone: ${milestone.title}\nDescription: ${milestone.description}\nLocation: ${locationStr}\nCaptured: ${new Date(capturedAt).toISOString()}` },
             { type: "image_url", image_url: { url: imageB64 } }
           ]
         }
