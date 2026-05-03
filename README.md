@@ -39,9 +39,10 @@ frontend/
   vite.config.ts
 ```
 
-`blockchain.ts` has the deployed factory address, Sepolia RPC fallback, contract
-ABIs, RainbowKit wallet setup, and campaign read hooks. Active Campaigns are
-read from the factory contract through the Sepolia RPC. The default RPC is:
+`blockchain.ts` has the deployed factory addresses, Sepolia RPC fallback,
+contract ABIs, RainbowKit wallet setup, and campaign read hooks. Active
+Campaigns are read from the factory contracts through the Sepolia RPC. The
+default RPC is:
 
 ```txt
 https://ethereum-sepolia-rpc.publicnode.com
@@ -54,6 +55,8 @@ Safari and mobile, set this in Vercel or `.env`:
 
 ```txt
 VITE_WALLETCONNECT_PROJECT_ID=your_project_id
+VITE_FACTORY_ADDRESS=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
+VITE_FACTORY_ADDRESSES=0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
 
 Do not commit `.env`.
@@ -68,6 +71,8 @@ Required server environment variables:
 OPENAI_API_KEY=your_openai_key
 PRIVATE_KEY=oracle_wallet_private_key
 SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+FACTORY_ADDRESS=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
+FACTORY_ADDRESSES=0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
 
 Keep the oracle wallet funded only with enough Sepolia ETH for gas. Never commit
@@ -97,11 +102,16 @@ Then add the environment variables above.
 
 ## Contracts
 
-Deployed factory:
+Deployed factories:
 
 ```txt
-0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
+Current factory: 0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
+Legacy factory read fallback: 0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
+
+Veto logic: donors may cast veto votes during the 24-hour review window. A
+milestone is rejected only if veto votes become a strict donor majority; donors
+who do not vote are counted as yes after the window.
 
 Sepolia Etherscan:
 

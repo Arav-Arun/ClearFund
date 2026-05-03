@@ -12,6 +12,27 @@ export const FACTORY_ADDRESS = (
   "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470"
 ).trim();
 
+const LEGACY_FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
+
+function uniqueAddresses(addresses: string[]) {
+  const seen = new Set<string>();
+
+  return addresses.map((address) => address.trim()).filter((address) => {
+    if (!ethers.isAddress(address)) return false;
+
+    const key = address.toLowerCase();
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    return true;
+  });
+}
+
+export const FACTORY_ADDRESSES = uniqueAddresses([
+  FACTORY_ADDRESS,
+  ...(env.VITE_FACTORY_ADDRESSES?.split(",") || [LEGACY_FACTORY_ADDRESS]),
+]);
+
 export const BLOCK_EXPLORER_URL =
   env.VITE_BLOCK_EXPLORER_URL ||
   "https://sepolia.etherscan.io";
@@ -59,6 +80,8 @@ export const FACTORY_ABI = [
   ) external returns (address)`,
   "function getAllCampaigns() view returns (address[])",
   "function getCampaignCount() view returns (uint256)",
+  "function getCampaignsByNGO(address) view returns (address[])",
+  "event CampaignCreated(address indexed, address indexed)",
   "event CampaignCreated(address indexed, address indexed, string)",
 ] as const;
 
@@ -96,18 +119,23 @@ export const CAMPAIGN_ABI = [
     )[]
   )`,
   "function getDonation(address) view returns (uint256)",
+  "function getDonors() view returns (address[])",
+  "function getVetoInfo(uint256,address) view returns (uint256 donorCount,uint256 currentVetoVotes,bool voterHasVetoed,uint256 vetoEndsAt)",
   "function donations(address) view returns (uint256)",
   "event DonationReceived(address indexed, uint256)",
   "event CampaignStarted()",
   "event MilestoneSubmitted(uint256 indexed, string)",
   "event OracleDecision(uint256 indexed, bool)",
+  "event VetoWindowOpened(uint256 indexed, uint256, address, uint256)",
   "event VetoCast(address indexed, uint256 indexed)",
+  "event VetoMajorityReached(uint256 indexed, uint256, uint256)",
   "event FundsReleased(uint256 indexed, uint256)",
   "event CampaignCancelled()",
 ] as const;
 
 export interface CampaignInfo {
   address: string;
+  factoryAddress: string;
   ngoAddress: string;
   title: string;
   description: string;
@@ -131,6 +159,9 @@ export interface MilestoneInfo {
   status: number;
   evidenceUrl: string;
   vetoEndsAt: number;
+  donorCount: number;
+  vetoVotes: number;
+  hasVetoed: boolean;
 }
 
 export interface WalletState {
@@ -166,6 +197,13 @@ type MilestoneRow = {
   deadline: bigint;
   status: bigint;
   evidenceUrl: string;
+  vetoEndsAt: bigint;
+};
+
+type VetoRow = {
+  donorCount: bigint;
+  currentVetoVotes: bigint;
+  voterHasVetoed: boolean;
   vetoEndsAt: bigint;
 };
 
@@ -246,7 +284,7 @@ export function useWallet(): WalletState {
 
   return {
     account,
-    provider: walletProvider ?? readonlyProvider,
+    provider: chainId === SEPOLIA_CHAIN_ID && walletProvider ? walletProvider : readonlyProvider,
     signer,
     chainId: chainId ?? null,
     isConnecting: isConnecting || isReconnecting,
@@ -262,9 +300,10 @@ function cleanDescription(description: string) {
   return description.replace(/\[PROFILE_CID:.*?\]/g, "").trim();
 }
 
-function toCampaignInfo(address: string, info: CampaignRow): CampaignInfo {
+function toCampaignInfo(address: string, factoryAddress: string, info: CampaignRow): CampaignInfo {
   return {
     address,
+    factoryAddress,
     ngoAddress: info.ngoAddress,
     title: info.title,
     description: cleanDescription(info.description),
@@ -278,6 +317,15 @@ function toCampaignInfo(address: string, info: CampaignRow): CampaignInfo {
   };
 }
 
+async function readCampaign(
+  provider: ethers.AbstractProvider,
+  factoryAddress: string,
+  campaignAddress: string
+) {
+  const contract = new ethers.Contract(campaignAddress, CAMPAIGN_ABI, provider);
+  return toCampaignInfo(campaignAddress, factoryAddress, await contract.getCampaign());
+}
+
 export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
   const [campaigns, setCampaigns] = useState<CampaignInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -289,15 +337,29 @@ export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
     setError(null);
 
     try {
-      const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
-      const addresses = await factory.getAllCampaigns();
-      const loaded = await Promise.all(
-        addresses.map(async (address: string) => {
-          const contract = new ethers.Contract(address, CAMPAIGN_ABI, provider);
-          return toCampaignInfo(address, await contract.getCampaign());
-        })
+      const loaded = (
+        await Promise.all(
+          FACTORY_ADDRESSES.map(async (factoryAddress) => {
+            try {
+              const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
+              const addresses: string[] = await factory.getAllCampaigns();
+              const rows = await Promise.allSettled(
+                addresses.map((address) => readCampaign(provider, factoryAddress, address))
+              );
+
+              return rows.flatMap((row) => row.status === "fulfilled" ? [row.value] : []);
+            } catch (err) {
+              console.error("Could not read factory:", factoryAddress, err);
+              return [];
+            }
+          })
+        )
+      ).flat();
+
+      const deduped = Array.from(
+        new Map(loaded.map((campaign) => [campaign.address.toLowerCase(), campaign])).values()
       );
-      setCampaigns(loaded);
+      setCampaigns(deduped);
     } catch (err) {
       console.error(err);
       setError("Could not load campaigns. Check the Sepolia RPC URL.");
@@ -314,7 +376,11 @@ export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
   return { campaigns, loading, error, refetch: fetchCampaigns };
 }
 
-export function useCampaign(provider: ethers.AbstractProvider | null, address: string | undefined) {
+export function useCampaign(
+  provider: ethers.AbstractProvider | null,
+  address: string | undefined,
+  account?: string | null
+) {
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null);
   const [milestones, setMilestones] = useState<MilestoneInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -330,20 +396,44 @@ export function useCampaign(provider: ethers.AbstractProvider | null, address: s
     setLoading(true);
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, provider);
-      setCampaign(toCampaignInfo(address, await contract.getCampaign()));
+      const info = toCampaignInfo(address, "", await contract.getCampaign());
+      if (account) {
+        info.userDonation = await contract.getDonation(account);
+      }
+      setCampaign(info);
 
       const rows = await contract.getAllMilestones();
       setMilestones(
-        rows.map((milestone: MilestoneRow, id: number) => ({
-          id,
-          title: milestone.title,
-          description: milestone.description,
-          fundPercent: Number(milestone.fundPercent),
-          deadline: Number(milestone.deadline),
-          status: Number(milestone.status),
-          evidenceUrl: milestone.evidenceUrl,
-          vetoEndsAt: Number(milestone.vetoEndsAt),
-        }))
+        await Promise.all(
+          rows.map(async (milestone: MilestoneRow, id: number) => {
+            let vetoInfo: VetoRow = {
+              donorCount: 0n,
+              currentVetoVotes: 0n,
+              voterHasVetoed: false,
+              vetoEndsAt: milestone.vetoEndsAt,
+            };
+
+            try {
+              vetoInfo = await contract.getVetoInfo(id, account || ethers.ZeroAddress);
+            } catch {
+              // Older deployed campaigns do not expose getVetoInfo yet.
+            }
+
+            return {
+              id,
+              title: milestone.title,
+              description: milestone.description,
+              fundPercent: Number(milestone.fundPercent),
+              deadline: Number(milestone.deadline),
+              status: Number(milestone.status),
+              evidenceUrl: milestone.evidenceUrl,
+              vetoEndsAt: Number(vetoInfo.vetoEndsAt || milestone.vetoEndsAt),
+              donorCount: Number(vetoInfo.donorCount),
+              vetoVotes: Number(vetoInfo.currentVetoVotes),
+              hasVetoed: vetoInfo.voterHasVetoed,
+            };
+          })
+        )
       );
     } catch (err) {
       console.error(err);
@@ -352,7 +442,7 @@ export function useCampaign(provider: ethers.AbstractProvider | null, address: s
     } finally {
       setLoading(false);
     }
-  }, [provider, address]);
+  }, [provider, address, account]);
 
   useEffect(() => {
     fetchCampaign();

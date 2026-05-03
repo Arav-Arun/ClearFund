@@ -4,6 +4,11 @@ import OpenAI from "openai";
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
 const FACTORY_ADDRESS =
   process.env.FACTORY_ADDRESS || "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470";
+const LEGACY_FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
+const FACTORY_ADDRESSES = [
+  FACTORY_ADDRESS,
+  ...(process.env.FACTORY_ADDRESSES?.split(",") || [LEGACY_FACTORY_ADDRESS]),
+].map((address) => address.trim()).filter(Boolean);
 
 const FACTORY_ABI = ["function getAllCampaigns() view returns (address[])"];
 
@@ -48,10 +53,23 @@ export default async function handler(req, res) {
     }
 
     const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
-    const campaigns = await factory.getAllCampaigns();
     const normalizedCampaign = campaignAddress.toLowerCase();
-    const isRegistered = campaigns.some((address) => address.toLowerCase() === normalizedCampaign);
+    let isRegistered = false;
+
+    for (const factoryAddress of FACTORY_ADDRESSES) {
+      if (!ethers.isAddress(factoryAddress)) continue;
+
+      try {
+        const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
+        const campaigns = await factory.getAllCampaigns();
+        if (campaigns.some((address) => address.toLowerCase() === normalizedCampaign)) {
+          isRegistered = true;
+          break;
+        }
+      } catch (err) {
+        console.error("Factory lookup failed:", factoryAddress, err);
+      }
+    }
 
     if (!isRegistered) {
       return res.status(403).json({ error: "Campaign is not registered." });

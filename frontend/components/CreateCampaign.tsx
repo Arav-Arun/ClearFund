@@ -1,10 +1,30 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ethers } from "ethers";
 import { FACTORY_ADDRESS, FACTORY_ABI } from "../blockchain";
 import type { WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
+type MilestoneDraft = {
+  title: string;
+  description: string;
+  fundPercent: string;
+  deadline: string;
+};
+
+const emptyMilestone = (): MilestoneDraft => ({
+  title: "",
+  description: "",
+  fundPercent: "",
+  deadline: "",
+});
+
+function toTimestamp(date: string) {
+  return Math.floor(new Date(date).getTime() / 1000);
+}
+
 export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
+  const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [ngoName, setNgoName] = useState("");
@@ -12,16 +32,31 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
   const [campaignDeadline, setCampaignDeadline] = useState("");
   const [bootstrapPercent, setBootstrapPercent] = useState("");
   const [milestones, setMilestones] = useState([
-    { title: "", description: "", fundPercent: "", deadline: "" },
+    emptyMilestone(),
+    emptyMilestone(),
   ]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAddMilestone = () => {
-    setMilestones([...milestones, { title: "", description: "", fundPercent: "", deadline: "" }]);
+    if (milestones.length >= 5) {
+      toast.error("Use at most 5 milestones.");
+      return;
+    }
+    setMilestones([...milestones, emptyMilestone()]);
   };
 
   const handleRemoveMilestone = (index: number) => {
+    if (milestones.length <= 2) {
+      toast.error("Use at least 2 milestones.");
+      return;
+    }
     setMilestones(milestones.filter((_, i) => i !== index));
+  };
+
+  const updateMilestone = (index: number, field: keyof MilestoneDraft, value: string) => {
+    setMilestones(
+      milestones.map((milestone, i) => i === index ? { ...milestone, [field]: value } : milestone)
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -30,21 +65,31 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
       toast.error("Please connect your wallet");
       return;
     }
+    if (wallet.isWrongNetwork) {
+      toast.error("Switch to Sepolia first");
+      return;
+    }
 
     try {
       setIsSubmitting(true);
       const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, wallet.signer);
 
+      const now = Math.floor(Date.now() / 1000);
       const parsedGoal = ethers.parseEther(goalAmount);
-      const parsedDeadline = Math.floor(new Date(campaignDeadline).getTime() / 1000);
+      const parsedDeadline = toTimestamp(campaignDeadline);
       const parsedBootstrap = Number(bootstrapPercent);
 
       const formattedMilestones = milestones.map((m) => ({
-        title: m.title,
-        description: m.description,
+        title: m.title.trim(),
+        description: m.description.trim(),
         fundPercent: Number(m.fundPercent),
-        deadline: Math.floor(new Date(m.deadline).getTime() / 1000),
+        deadline: toTimestamp(m.deadline),
       }));
+
+      if (parsedGoal <= 0n) {
+        toast.error("Goal must be greater than 0 ETH.");
+        return;
+      }
 
       if (milestones.length < 2 || milestones.length > 5) {
         toast.error("Use 2 to 5 milestones.");
@@ -56,16 +101,41 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
         return;
       }
 
+      if (!Number.isFinite(parsedDeadline) || parsedDeadline <= now) {
+        toast.error("Campaign deadline must be in the future.");
+        return;
+      }
+
       const totalMilestonePercent = formattedMilestones.reduce((acc, m) => acc + m.fundPercent, 0);
       if (totalMilestonePercent !== 100) {
         toast.error(`Milestone percentages must equal 100%. Currently: ${totalMilestonePercent}%`);
         return;
       }
 
+      let previousDeadline = parsedDeadline;
+      for (const milestone of formattedMilestones) {
+        if (!milestone.title || !milestone.description) {
+          toast.error("Every milestone needs a title and description.");
+          return;
+        }
+
+        if (!Number.isFinite(milestone.fundPercent) || milestone.fundPercent < 1 || milestone.fundPercent > 100) {
+          toast.error("Each milestone fund percent must be between 1 and 100.");
+          return;
+        }
+
+        if (!Number.isFinite(milestone.deadline) || milestone.deadline <= previousDeadline) {
+          toast.error("Milestone deadlines must be after fundraising and in order.");
+          return;
+        }
+
+        previousDeadline = milestone.deadline;
+      }
+
       const tx = await factory.createCampaign(
-        title,
-        description,
-        ngoName,
+        title.trim(),
+        description.trim(),
+        ngoName.trim(),
         parsedBootstrap,
         formattedMilestones,
         parsedGoal,
@@ -73,8 +143,22 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
       );
 
       toast.loading("Transaction pending...", { id: "tx" });
-      await tx.wait();
+      const receipt = await tx.wait();
+      if (!receipt) throw new Error("Transaction was not confirmed.");
       toast.success("Campaign created successfully!", { id: "tx" });
+
+      let campaignAddress: string | null = null;
+      for (const log of receipt.logs) {
+        try {
+          const parsed = factory.interface.parseLog(log);
+          if (parsed?.name === "CampaignCreated") {
+            campaignAddress = parsed.args[0] as string;
+            break;
+          }
+        } catch {
+          // Ignore logs from other contracts in the same transaction.
+        }
+      }
       
       setTitle("");
       setDescription("");
@@ -82,7 +166,8 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
       setGoalAmount("");
       setCampaignDeadline("");
       setBootstrapPercent("");
-      setMilestones([{ title: "", description: "", fundPercent: "", deadline: "" }]);
+      setMilestones([emptyMilestone(), emptyMilestone()]);
+      navigate(campaignAddress ? `/campaign/${campaignAddress}` : "/");
 
     } catch (err: unknown) {
       console.error(err);
@@ -160,7 +245,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
 
         <div>
           <label className="neo-label">Bootstrap Funds (%)</label>
-          <p className="text-secondary text-sm mb-2">Percentage released immediately upon funding goal met.</p>
+          <p className="text-secondary text-sm mb-2">Percentage released when the bootstrap threshold is reached.</p>
           <input
             className="neo-input"
             type="number"
@@ -177,10 +262,10 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
           <h2 className="section-title text-xl mb-4">Milestones</h2>
           
           {milestones.map((milestone, index) => (
-            <div key={index} className="neo-card mb-4" style={{ background: "var(--bg)" }}>
+            <div key={index} className="milestone-form-group mb-4">
               <div className="flex justify-between items-center mb-2">
                 <span className="font-bold">Milestone {index + 1}</span>
-                {milestones.length > 1 && (
+                {milestones.length > 2 && (
                   <button type="button" className="neo-btn" style={{ padding: "4px 8px" }} onClick={() => handleRemoveMilestone(index)}>
                     Remove
                   </button>
@@ -194,11 +279,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
                   required
                   placeholder="Milestone Title"
                   value={milestone.title}
-                  onChange={(e) => {
-                    const newM = [...milestones];
-                    newM[index].title = e.target.value;
-                    setMilestones(newM);
-                  }}
+                  onChange={(e) => updateMilestone(index, "title", e.target.value)}
                 />
                 <textarea
                   className="neo-input"
@@ -206,11 +287,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
                   rows={2}
                   placeholder="Milestone Description"
                   value={milestone.description}
-                  onChange={(e) => {
-                    const newM = [...milestones];
-                    newM[index].description = e.target.value;
-                    setMilestones(newM);
-                  }}
+                  onChange={(e) => updateMilestone(index, "description", e.target.value)}
                 />
                 <div className="flex gap-4">
                   <input
@@ -221,22 +298,14 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
                     max="100"
                     placeholder="Fund %"
                     value={milestone.fundPercent}
-                    onChange={(e) => {
-                      const newM = [...milestones];
-                      newM[index].fundPercent = e.target.value;
-                      setMilestones(newM);
-                    }}
+                    onChange={(e) => updateMilestone(index, "fundPercent", e.target.value)}
                   />
                   <input
                     className="neo-input flex-1"
                     type="date"
                     required
                     value={milestone.deadline}
-                    onChange={(e) => {
-                      const newM = [...milestones];
-                      newM[index].deadline = e.target.value;
-                      setMilestones(newM);
-                    }}
+                    onChange={(e) => updateMilestone(index, "deadline", e.target.value)}
                   />
                 </div>
               </div>
@@ -247,6 +316,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
             type="button"
             className="neo-btn neo-btn-outline w-full mt-2"
             onClick={handleAddMilestone}
+            disabled={milestones.length >= 5}
           >
             + Add Milestone
           </button>

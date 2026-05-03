@@ -11,14 +11,31 @@ import {
 import type { WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
+function statusTagClass(status: number) {
+  if (status === 0) return "neo-tag-blue";
+  if (status === 1 || status === 2) return "neo-tag-yellow";
+  if (status === 3) return "neo-tag-green";
+  return "neo-tag-red";
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read evidence image."));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const { address } = useParams<{ address: string }>();
-  const { campaign, milestones, loading, refetch } = useCampaign(wallet.provider, address);
+  const { campaign, milestones, loading, refetch } = useCampaign(wallet.provider, address, wallet.account);
   
   const [donateAmount, setDonateAmount] = useState("");
   const [isDonating, setIsDonating] = useState(false);
 
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [evidenceMilestoneId, setEvidenceMilestoneId] = useState<number | null>(null);
   const [locationStr, setLocationStr] = useState<string>("");
   const [submittingMilestone, setSubmittingMilestone] = useState<number | null>(null);
 
@@ -34,10 +51,13 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           (_error) => {
             toast.error("Failed to get location. It is required.", { id: "geo" });
             setEvidenceFile(null);
+            setEvidenceMilestoneId(null);
           }
         );
       } else {
         toast.error("Geolocation is not supported by this browser.");
+        setEvidenceFile(null);
+        setEvidenceMilestoneId(null);
       }
     }
   }, [evidenceFile, locationStr]);
@@ -50,9 +70,19 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     return <div className="page-container"><div className="empty-state">Campaign not found</div></div>;
   }
 
+  const isNgo = wallet.account?.toLowerCase() === campaign.ngoAddress.toLowerCase();
+  const isDonor = (campaign.userDonation || 0n) > 0n;
+  const bootstrapTarget = (campaign.goalAmount * BigInt(campaign.bootstrapPercent)) / 100n;
+  const canStartCampaign = campaign.raisedAmount >= bootstrapTarget;
+  const now = Math.floor(Date.now() / 1000);
+  const nextMilestone = milestones.find((milestone) => milestone.id > 0 && milestone.status !== 3);
+  const canCancelStalled = campaign.status === 1 && !!nextMilestone?.deadline && nextMilestone.deadline < now;
+  const fundraisingFailed = campaign.status === 0 && campaign.campaignDeadline < now && campaign.raisedAmount < bootstrapTarget;
+
   const handleDonate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     
     try {
       setIsDonating(true);
@@ -74,6 +104,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
   const handleStartCampaign = async () => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.startCampaign();
@@ -88,6 +119,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
   const handleCancelStalled = async () => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.cancelStalledCampaign();
@@ -100,8 +132,24 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     }
   };
 
+  const handleRefund = async () => {
+    if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
+    try {
+      const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
+      const tx = await contract.refund();
+      toast.loading("Claiming refund...", { id: "refund" });
+      await tx.wait();
+      toast.success("Refund claimed.", { id: "refund" });
+      refetch();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Refund failed", { id: "refund" });
+    }
+  };
+
   const handleSubmitMilestone = async (milestoneId: number) => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     if (!evidenceFile || !locationStr) return toast.error("Live photo and location required");
 
     try {
@@ -115,36 +163,28 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       await tx.wait();
       toast.success("Submitted on-chain! Sending to AI Oracle...", { id: "submit" });
       
-      const reader = new FileReader();
-      reader.readAsDataURL(evidenceFile);
-      reader.onload = async () => {
-        const base64Image = reader.result as string;
-        
-        try {
-          const response = await fetch("/api/analyze", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              campaignAddress: address,
-              milestoneId: milestoneId,
-              imageB64: base64Image,
-              locationStr: locationStr
-            })
-          });
-          
-          const result = await response.json();
-          if (result.error) {
-            toast.error(`Oracle Error: ${result.error}`, { id: "submit" });
-          } else {
-            toast.success(`AI Oracle Decision: ${result.status}`, { id: "submit" });
-          }
-          refetch();
-        } catch (err) {
-          toast.error("Failed to connect to AI Oracle backend", { id: "submit" });
-        }
-      };
+      const base64Image = await readFileAsDataUrl(evidenceFile);
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignAddress: address,
+          milestoneId,
+          imageB64: base64Image,
+          locationStr,
+        }),
+      });
+
+      const result = await response.json().catch(() => ({ error: "Oracle request failed" }));
+      if (!response.ok || result.error) {
+        toast.error(`Oracle Error: ${result.error || "Request failed"}`, { id: "submit" });
+      } else {
+        toast.success(`AI Oracle Decision: ${result.status}`, { id: "submit" });
+      }
+      refetch();
 
       setEvidenceFile(null);
+      setEvidenceMilestoneId(null);
       setLocationStr("");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to submit", { id: "submit" });
@@ -155,12 +195,13 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
   const handleVeto = async (milestoneId: number) => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.vetoMilestone(milestoneId);
-      toast.loading("Casting Veto...", { id: "veto" });
+      toast.loading("Recording veto vote...", { id: "veto" });
       await tx.wait();
-      toast.success("Veto successful! Milestone rejected.", { id: "veto" });
+      toast.success("Veto recorded. Rejection requires a donor majority.", { id: "veto" });
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Veto failed", { id: "veto" });
@@ -169,6 +210,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
   const handleExecute = async (milestoneId: number) => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.executeMilestone(milestoneId);
@@ -193,7 +235,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             <h1 className="page-title">{campaign.title}</h1>
             <p className="text-secondary mt-1">By {campaign.ngoName}</p>
           </div>
-          <span className="neo-tag neo-tag-blue">
+          <span className={`neo-tag ${campaign.status === 3 ? "neo-tag-red" : statusTagClass(campaign.status)}`}>
             {CAMPAIGN_STATUS[campaign.status]}
           </span>
         </div>
@@ -207,6 +249,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           <span>{formatEth(campaign.raisedAmount)} ETH raised</span>
           <span>{formatEth(campaign.goalAmount)} ETH soft goal</span>
         </div>
+
+        {wallet.account && (
+          <p className="text-secondary text-sm mb-4">
+            Your donation: {formatEth(campaign.userDonation || 0n)} ETH
+          </p>
+        )}
 
         {campaign.status === 0 && (
           <form onSubmit={handleDonate} className="flex gap-4 mb-4">
@@ -229,16 +277,26 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           </form>
         )}
 
-        {campaign.status === 0 && wallet.account?.toLowerCase() === campaign.ngoAddress.toLowerCase() && (
-           <button onClick={handleStartCampaign} className="neo-btn" style={{ background: "var(--accent)" }}>
-             Start Campaign & Lock Donations
+        {campaign.status === 0 && isNgo && (
+           <button
+             onClick={handleStartCampaign}
+             className="neo-btn neo-btn-primary"
+             disabled={!canStartCampaign}
+           >
+             {canStartCampaign ? "Start Campaign" : `Need ${formatEth(bootstrapTarget)} ETH to start`}
            </button>
         )}
 
-        {campaign.status === 1 && (
-           <button onClick={handleCancelStalled} className="neo-btn mt-4" style={{ background: "var(--danger)", color: "white" }}>
-             Cancel Stalled Campaign (If NGO Ghosted)
+        {canCancelStalled && (
+           <button onClick={handleCancelStalled} className="neo-btn neo-btn-danger mt-4">
+             Cancel After Missed Milestone Deadline
            </button>
+        )}
+
+        {(campaign.status === 3 || fundraisingFailed) && isDonor && (
+          <button onClick={handleRefund} className="neo-btn neo-btn-outline mt-4">
+            Claim Refund
+          </button>
         )}
       </div>
 
@@ -248,7 +306,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           <div key={milestone.id} className="neo-card milestone-card">
             <div className="flex justify-between items-center mb-2">
               <h3 className="font-bold">{milestone.title}</h3>
-              <span className={`neo-tag ${milestone.status === 0 ? "neo-tag-blue" : milestone.status === 1 ? "neo-tag-yellow" : milestone.status === 2 ? "neo-tag-yellow" : milestone.status === 3 ? "neo-tag-green" : "neo-tag-red"}`}>
+              <span className={`neo-tag ${statusTagClass(milestone.status)}`}>
                 {MILESTONE_STATUS[milestone.status]}
               </span>
             </div>
@@ -257,21 +315,32 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             
             <div className="flex justify-between text-sm text-muted mb-4">
               <span>Fund allocation: {milestone.fundPercent}%</span>
-              <span>Deadline: {new Date(milestone.deadline * 1000).toLocaleDateString()}</span>
+              <span>
+                Deadline: {milestone.id === 0 ? "Released at start" : new Date(milestone.deadline * 1000).toLocaleDateString()}
+              </span>
             </div>
 
-            {wallet.account?.toLowerCase() === campaign.ngoAddress.toLowerCase() && milestone.status === 0 && (
+            {isNgo && milestone.id > 0 && milestone.status === 0 && (
               <div className="flex gap-2 mt-4 items-center">
                 <input
                   type="file"
                   accept="image/*"
                   capture="environment"
                   className="neo-input flex-1"
-                  onChange={(e) => setEvidenceFile(e.target.files?.[0] || null)}
+                  onChange={(e) => {
+                    setEvidenceFile(e.target.files?.[0] || null);
+                    setEvidenceMilestoneId(e.target.files?.[0] ? milestone.id : null);
+                    setLocationStr("");
+                  }}
                 />
                 <button
                   className="neo-btn neo-btn-primary"
-                  disabled={submittingMilestone === milestone.id || !evidenceFile || !locationStr}
+                  disabled={
+                    submittingMilestone === milestone.id ||
+                    !evidenceFile ||
+                    !locationStr ||
+                    evidenceMilestoneId !== milestone.id
+                  }
                   onClick={() => handleSubmitMilestone(milestone.id)}
                 >
                   Submit Live Evidence
@@ -290,14 +359,35 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             {milestone.status === 2 && (
               <div className="mt-4 p-4 border-t-2" style={{ borderColor: 'var(--border)' }}>
                 <p className="mb-2 text-sm font-bold" style={{ color: 'var(--success)' }}>
-                  AI Approved! 24-Hour Veto Window Active.
+                  AI Approved. 24-Hour Veto Window Active.
                 </p>
                 <p className="text-xs mb-4 text-secondary">
-                  Veto ends at: {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}
+                  No vote counts as yes. Veto votes: {milestone.vetoVotes}/{milestone.donorCount || "?"}. Ends at {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}.
                 </p>
+                {(isDonor || isNgo) && (
+                  <div className="notice-box mb-4">
+                    {isNgo
+                      ? "Donors and the NGO should watch this 24-hour review window. Funds release if veto votes do not reach a majority."
+                      : "You are a donor on this campaign. Only vote if you want to block this milestone; doing nothing counts as yes."}
+                  </div>
+                )}
                 <div className="flex gap-4 mt-4">
-                  <button className="neo-btn" style={{ background: 'var(--danger)', color: 'white' }} onClick={() => handleVeto(milestone.id)}>Veto AI Decision</button>
-                  <button className="neo-btn" style={{ background: 'var(--accent)' }} onClick={() => handleExecute(milestone.id)}>Execute (If Veto Passed)</button>
+                  {isDonor && (
+                    <button
+                      className="neo-btn neo-btn-danger"
+                      disabled={milestone.hasVetoed || milestone.vetoEndsAt <= now}
+                      onClick={() => handleVeto(milestone.id)}
+                    >
+                      {milestone.hasVetoed ? "Veto Recorded" : "Veto Milestone"}
+                    </button>
+                  )}
+                  <button
+                    className="neo-btn neo-btn-primary"
+                    disabled={milestone.vetoEndsAt > now}
+                    onClick={() => handleExecute(milestone.id)}
+                  >
+                    {milestone.vetoEndsAt > now ? "Waiting for Veto Window" : "Release Funds"}
+                  </button>
                 </div>
               </div>
             )}

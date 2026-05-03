@@ -19,7 +19,7 @@ contract ClearFundFactory {
     address[] public campaigns;
     mapping(address => address[]) public campaignsByNGO;
 
-    event CampaignCreated(address indexed campaignAddress, address indexed ngo, string title);
+    event CampaignCreated(address indexed campaignAddress, address indexed ngo);
 
     constructor(address _oracleAddress) {
         require(_oracleAddress != address(0), "Factory: oracle required");
@@ -87,7 +87,7 @@ contract ClearFundFactory {
         campaigns.push(campaignAddr);
         campaignsByNGO[msg.sender].push(campaignAddr);
 
-        emit CampaignCreated(campaignAddr, msg.sender, _title);
+        emit CampaignCreated(campaignAddr, msg.sender);
 
         return campaignAddr;
     }

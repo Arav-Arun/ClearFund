@@ -2,6 +2,13 @@ import { Link } from "react-router-dom";
 import { CAMPAIGN_STATUS, formatEth, useAllCampaigns } from "../blockchain";
 import type { WalletState } from "../blockchain";
 
+function campaignTagClass(status: number) {
+  if (status === 0) return "neo-tag-blue";
+  if (status === 1) return "neo-tag-yellow";
+  if (status === 2) return "neo-tag-green";
+  return "neo-tag-red";
+}
+
 export default function Home({ wallet }: { wallet: WalletState }) {
   const { campaigns, loading, error } = useAllCampaigns(wallet.provider);
 
@@ -85,7 +92,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         </div>
         <div className="stat-box">
           <div className="stat-value">{activeCount}</div>
-          <div className="stat-label">In Review</div>
+          <div className="stat-label">In Progress</div>
         </div>
         <div className="stat-box">
           <div className="stat-value">{completedCount}</div>
@@ -133,13 +140,13 @@ export default function Home({ wallet }: { wallet: WalletState }) {
                   </div>
                   <div className="campaign-card-body">
                     <div className="flex justify-between items-center mb-6">
-                      <span className={`neo-tag ${campaign.status === 0 ? "neo-tag-blue" : campaign.status === 1 ? "neo-tag-yellow" : "neo-tag-green"}`}>
-                        {CAMPAIGN_STATUS[campaign.status]}
+                      <span className={`neo-tag ${campaignTagClass(campaign.status)}`}>
+                        {CAMPAIGN_STATUS[campaign.status] || "Unknown"}
                       </span>
                     </div>
 
                     <p className="text-secondary text-sm mb-6" style={{ minHeight: 60, lineHeight: 1.5 }}>
-                      {campaign.description.slice(0, 120)}
+                      {(campaign.description || "No description provided.").slice(0, 120)}
                       {campaign.description.length > 120 ? "..." : ""}
                     </p>
 
@@ -155,7 +162,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
                         <div className="stat-value" style={{ fontSize: "18px", border: "none", marginBottom: 0 }}>
                           {formatEth(campaign.raisedAmount)} ETH
                         </div>
-                        <div className="stat-label">Raised of {formatEth(campaign.goalAmount)}</div>
+                        <div className="stat-label">Raised of {formatEth(campaign.goalAmount)} ETH</div>
                       </div>
                       <div className="text-right">
                         <div className="stat-value" style={{ fontSize: "18px", border: "none", marginBottom: 0 }}>

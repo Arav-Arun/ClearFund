@@ -12,6 +12,7 @@ frontend/dist/
 artifacts/
 cache/
 typechain-types/
+*.bin
 
 # Environment
 .env

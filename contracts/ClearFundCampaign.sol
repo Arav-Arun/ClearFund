@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
 /// @title ClearFundCampaign — AI Oracle Verification with Veto
 /// @author Arav Arun
 /// @notice Escrows ETH. Milestones are verified by an AI Oracle, followed by a 24-hour donor veto window.
-contract ClearFundCampaign is ReentrancyGuard {
+contract ClearFundCampaign {
     enum CampaignStatus { Fundraising, Active, Completed, Cancelled }
     enum MilestoneStatus { Pending, Submitted, InVeto, Approved, Rejected }
 
@@ -53,18 +51,33 @@ contract ClearFundCampaign is ReentrancyGuard {
     bool public bootstrapReleased;
     mapping(uint256 => bool) public fundsReleased;
     mapping(address => bool) public refunded;
+    uint256 public refundPool;
 
     address public deployer;
+    bool private locked;
+
+    mapping(uint256 => uint256) public vetoVotes;
+    mapping(uint256 => uint256) public vetoRounds;
+    mapping(uint256 => mapping(address => uint256)) public lastVetoRound;
 
     event DonationReceived(address indexed donor, uint256 amount);
     event BootstrapReleased(uint256 amount);
     event CampaignStarted();
     event MilestoneSubmitted(uint256 indexed milestoneId, string evidenceUrl);
     event OracleDecision(uint256 indexed milestoneId, bool approved);
+    event VetoWindowOpened(uint256 indexed milestoneId, uint256 vetoEndsAt, address ngo, uint256 donorCount);
     event VetoCast(address indexed voter, uint256 indexed milestoneId);
+    event VetoMajorityReached(uint256 indexed milestoneId, uint256 vetoVotes, uint256 donorCount);
     event FundsReleased(uint256 indexed milestoneId, uint256 amount);
     event CampaignCancelled();
     event RefundIssued(address indexed donor, uint256 amount);
+
+    modifier nonReentrant() {
+        require(!locked, "Campaign: reentrant call");
+        locked = true;
+        _;
+        locked = false;
+    }
 
     modifier onlyNGO() {
         require(msg.sender == ngoAddress, "Campaign: caller is not the NGO");
@@ -201,8 +214,11 @@ contract ClearFundCampaign is ReentrancyGuard {
 
         m.status = MilestoneStatus.InVeto;
         m.vetoEndsAt = block.timestamp + 24 hours;
+        vetoVotes[milestoneId] = 0;
+        vetoRounds[milestoneId] += 1;
 
         emit OracleDecision(milestoneId, true);
+        emit VetoWindowOpened(milestoneId, m.vetoEndsAt, ngoAddress, donorList.length);
     }
 
     function oracleRejectMilestone(uint256 milestoneId) external onlyOracle inStatus(CampaignStatus.Active) {
@@ -218,10 +234,16 @@ contract ClearFundCampaign is ReentrancyGuard {
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.InVeto, "Campaign: not in veto phase");
         require(block.timestamp <= m.vetoEndsAt, "Campaign: veto period ended");
+        require(lastVetoRound[milestoneId][msg.sender] != vetoRounds[milestoneId], "Campaign: already voted");
 
-        // A single donor veto halts the automated release, forcing the NGO to resubmit or dispute off-chain.
-        m.status = MilestoneStatus.Rejected;
+        lastVetoRound[milestoneId][msg.sender] = vetoRounds[milestoneId];
+        vetoVotes[milestoneId] += 1;
         emit VetoCast(msg.sender, milestoneId);
+
+        if (vetoVotes[milestoneId] > donorList.length / 2) {
+            m.status = MilestoneStatus.Rejected;
+            emit VetoMajorityReached(milestoneId, vetoVotes[milestoneId], donorList.length);
+        }
     }
 
     // EXECUTE
@@ -252,7 +274,7 @@ contract ClearFundCampaign is ReentrancyGuard {
         if (_allMilestonesApproved()) status = CampaignStatus.Completed;
     }
 
-    // GHOSTING DEADLOCK FIX
+    // Cancellation after a missed active milestone deadline.
     function cancelStalledCampaign() external {
         require(status == CampaignStatus.Active, "Campaign: not active");
         uint256 activeMilestone = 0;
@@ -268,6 +290,7 @@ contract ClearFundCampaign is ReentrancyGuard {
         require(block.timestamp > milestones[activeMilestone].deadline, "Campaign: deadline not passed");
         
         status = CampaignStatus.Cancelled;
+        refundPool = address(this).balance;
         emit CampaignCancelled();
     }
 
@@ -276,9 +299,15 @@ contract ClearFundCampaign is ReentrancyGuard {
         require(status == CampaignStatus.Cancelled || fundraisingFailed, "Campaign: refund not available");
         require(!refunded[msg.sender], "Campaign: refunded");
 
-        if (fundraisingFailed && status != CampaignStatus.Cancelled) status = CampaignStatus.Cancelled;
+        if (fundraisingFailed && status != CampaignStatus.Cancelled) {
+            status = CampaignStatus.Cancelled;
+            refundPool = address(this).balance;
+            emit CampaignCancelled();
+        }
 
-        uint256 amount = (address(this).balance * donations[msg.sender]) / raisedAmount;
+        if (refundPool == 0) refundPool = address(this).balance;
+
+        uint256 amount = (refundPool * donations[msg.sender]) / raisedAmount;
         require(amount > 0, "Campaign: nothing to refund");
 
         refunded[msg.sender] = true;
@@ -318,6 +347,17 @@ contract ClearFundCampaign is ReentrancyGuard {
 
     function getDonation(address donor) external view returns (uint256) {
         return donations[donor];
+    }
+
+    function getVetoInfo(uint256 milestoneId, address voter) external view returns (
+        uint256 donorCount,
+        uint256 currentVetoVotes,
+        bool voterHasVetoed,
+        uint256 vetoEndsAt
+    ) {
+        Milestone storage m = milestones[milestoneId];
+        bool voterVetoed = vetoRounds[milestoneId] > 0 && lastVetoRound[milestoneId][voter] == vetoRounds[milestoneId];
+        return (donorList.length, vetoVotes[milestoneId], voterVetoed, m.vetoEndsAt);
     }
 
     receive() external payable {}
