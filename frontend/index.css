@@ -145,6 +145,7 @@ button { cursor: pointer; font-family: var(--font); }
   cursor: pointer;
   text-decoration: none;
   transition: all var(--speed) ease;
+  white-space: nowrap;
 }
 .neo-btn:hover { text-decoration: none; }
 .neo-btn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -284,6 +285,7 @@ label {
   max-width: 1080px;
   margin: 0 auto;
   padding: 48px 24px 80px;
+  width: 100%;
 }
 
 .page-title {
@@ -438,7 +440,7 @@ label {
    ═══════════════════════════════════════════════ */
 .campaign-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: 32px;
 }
 
@@ -469,6 +471,7 @@ label {
   font-weight: 700;
   color: var(--text);
   margin-bottom: 2px;
+  overflow-wrap: anywhere;
 }
 .campaign-card-ngo {
   font-size: 13px;
@@ -524,6 +527,14 @@ label {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+}
+
+.footer-contract {
+  max-width: 1080px;
+  margin: 24px auto 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
 }
 
 /* ═══════════════════════════════════════════════
@@ -621,6 +632,7 @@ label {
     flex-wrap: wrap;
     justify-content: center;
     width: 100%;
+    gap: 8px;
   }
 
   .navbar-links .neo-btn {
@@ -630,7 +642,7 @@ label {
   }
 
   .page-container {
-    padding: 32px 16px 64px;
+    padding: 30px 18px 64px;
   }
 
   .hero-headline {
@@ -640,7 +652,8 @@ label {
 
   .hero-description-box {
     padding: 20px;
-    width: 100%;
+    width: calc(100% - 6px);
+    box-shadow: 4px 4px 0 var(--border);
   }
 
   .how-it-works-grid,
@@ -651,6 +664,10 @@ label {
 
   .active-header-box {
     font-size: 24px;
+  }
+
+  .stat-value {
+    font-size: 22px;
   }
 
   .neo-card {
@@ -675,16 +692,79 @@ label {
 }
 
 @media (max-width: 480px) {
+  .navbar {
+    padding: 14px 12px;
+  }
+
   .navbar-link {
-    padding: 6px 10px;
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+
+  .navbar-links .neo-btn {
+    width: 100%;
+    max-width: 220px;
+  }
+
+  .neo-btn {
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  .page-container {
+    padding-inline: 14px;
   }
 
   .hero-headline {
-    font-size: 28px;
+    font-size: 27px;
+    line-height: 1.12;
+  }
+
+  .hero-highlight {
+    padding-inline: 6px;
+  }
+
+  .hero-description-box {
+    padding: 18px 14px;
+  }
+
+  .hero-description-box p {
+    font-size: 14px !important;
+  }
+
+  .page-container > section:first-child .flex {
+    gap: 14px;
+  }
+
+  .page-container > section:first-child .neo-btn {
+    width: 100%;
+    max-width: 260px;
+  }
+
+  .stats-grid,
+  .how-it-works-grid,
+  .campaign-grid {
+    gap: 14px;
+  }
+
+  .how-card,
+  .campaign-card-body,
+  .campaign-card-header {
+    padding: 18px 16px;
   }
 
   .active-header-box {
     display: block;
+    font-size: 22px;
+    padding: 14px 16px;
     text-align: center;
+  }
+
+  .footer {
+    padding: 28px 16px;
+  }
+
+  .footer-content > .flex:last-child {
+    gap: 14px;
   }
 }

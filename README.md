@@ -188,14 +188,15 @@ veto window as a human review layer after AI approval.
 
 ## Deployed Sepolia Factories
 
-The frontend reads from the current factory and a legacy factory so older
-campaigns remain visible.
+The frontend reads from the current factory and older factories so previously
+created campaign tiles remain visible.
 
 ```txt
 Current factory:
-0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
+0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
 
-Legacy read fallback:
+Legacy read fallbacks:
+0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
 0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
 
@@ -203,7 +204,9 @@ If you redeploy the contracts, update:
 
 ```txt
 VITE_FACTORY_ADDRESS
+VITE_FACTORY_ADDRESSES
 FACTORY_ADDRESS
+FACTORY_ADDRESSES
 ```
 
 Existing deployed contracts cannot be changed by pushing new source code. Any
@@ -236,8 +239,8 @@ Client-side variables:
 
 ```txt
 VITE_WALLETCONNECT_PROJECT_ID=your_reown_or_walletconnect_project_id
-VITE_FACTORY_ADDRESS=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
-VITE_FACTORY_ADDRESSES=0x6A837595E2592d699d48eB2DAcF47Df9493035d2
+VITE_FACTORY_ADDRESS=0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
+VITE_FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470,0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 VITE_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 ```
 
@@ -247,8 +250,8 @@ Server-side variables for `frontend/api/analyze.js`:
 OPENAI_API_KEY=your_openai_key
 PRIVATE_KEY=oracle_wallet_private_key
 SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-FACTORY_ADDRESS=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
-FACTORY_ADDRESSES=0x6A837595E2592d699d48eB2DAcF47Df9493035d2
+FACTORY_ADDRESS=0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
+FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470,0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
 
 Never commit `.env`, private keys, API keys, deployment metadata, or generated
@@ -261,6 +264,9 @@ Use one Vercel project with the root directory set to:
 ```txt
 frontend
 ```
+
+This is important. If Vercel builds from the repository root, it will not find
+the frontend dependencies and the build can fail with `vite: command not found`.
 
 The included `frontend/vercel.json` sets:
 
@@ -276,6 +282,10 @@ With the root set to `frontend`, the oracle route deploys as:
 ```txt
 /api/analyze
 ```
+
+If Vercel already has `VITE_FACTORY_ADDRESS` or `FACTORY_ADDRESS` configured
+from an older deployment, update those values to the current factory address
+listed above, or remove them so the source-code defaults are used.
 
 ## Public Repo Hygiene
 

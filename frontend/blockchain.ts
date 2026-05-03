@@ -9,10 +9,13 @@ const env = import.meta.env;
 
 export const FACTORY_ADDRESS = (
   env.VITE_FACTORY_ADDRESS ||
-  "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470"
+  "0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398"
 ).trim();
 
-const LEGACY_FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
+const LEGACY_FACTORY_ADDRESSES = [
+  "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
+  "0x6A837595E2592d699d48eB2DAcF47Df9493035d2",
+];
 
 function uniqueAddresses(addresses: string[]) {
   const seen = new Set<string>();
@@ -30,7 +33,7 @@ function uniqueAddresses(addresses: string[]) {
 
 export const FACTORY_ADDRESSES = uniqueAddresses([
   FACTORY_ADDRESS,
-  ...(env.VITE_FACTORY_ADDRESSES?.split(",") || [LEGACY_FACTORY_ADDRESS]),
+  ...(env.VITE_FACTORY_ADDRESSES?.split(",") || LEGACY_FACTORY_ADDRESSES),
 ]);
 
 export const BLOCK_EXPLORER_URL =

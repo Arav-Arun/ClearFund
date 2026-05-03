@@ -3,11 +3,14 @@ import OpenAI from "openai";
 
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
 const FACTORY_ADDRESS =
-  process.env.FACTORY_ADDRESS || "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470";
-const LEGACY_FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
+  process.env.FACTORY_ADDRESS || "0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398";
+const LEGACY_FACTORY_ADDRESSES = [
+  "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
+  "0x6A837595E2592d699d48eB2DAcF47Df9493035d2",
+];
 const FACTORY_ADDRESSES = [
   FACTORY_ADDRESS,
-  ...(process.env.FACTORY_ADDRESSES?.split(",") || [LEGACY_FACTORY_ADDRESS]),
+  ...(process.env.FACTORY_ADDRESSES?.split(",") || LEGACY_FACTORY_ADDRESSES),
 ].map((address) => address.trim()).filter(Boolean);
 
 const FACTORY_ABI = ["function getAllCampaigns() view returns (address[])"];
