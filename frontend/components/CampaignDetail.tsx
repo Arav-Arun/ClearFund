@@ -1,10 +1,14 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { ethers } from "ethers";
-import { useCampaign } from "../campaigns";
-import { CAMPAIGN_ABI, CAMPAIGN_STATUS, MILESTONE_STATUS } from "../chain";
-import { formatEth } from "../format";
-import type { WalletState } from "../types";
+import {
+  CAMPAIGN_ABI,
+  CAMPAIGN_STATUS,
+  MILESTONE_STATUS,
+  formatEth,
+  useCampaign,
+} from "../blockchain";
+import type { WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
@@ -18,7 +22,6 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const [locationStr, setLocationStr] = useState<string>("");
   const [submittingMilestone, setSubmittingMilestone] = useState<number | null>(null);
 
-  // Auto-fetch location when trying to submit
   useEffect(() => {
     if (evidenceFile && !locationStr) {
       if (navigator.geolocation) {
@@ -104,7 +107,6 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     try {
       setSubmittingMilestone(milestoneId);
       
-      // 1. Submit on-chain first
       const simulatedUploadUrl = `ipfs://live-capture-${Date.now()}`;
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.submitMilestone(milestoneId, simulatedUploadUrl);
@@ -113,13 +115,11 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       await tx.wait();
       toast.success("Submitted on-chain! Sending to AI Oracle...", { id: "submit" });
       
-      // 2. Convert File to Base64
       const reader = new FileReader();
       reader.readAsDataURL(evidenceFile);
       reader.onload = async () => {
         const base64Image = reader.result as string;
         
-        // 3. Trigger Oracle Backend
         try {
           const response = await fetch("/api/analyze", {
             method: "POST",
@@ -229,14 +229,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           </form>
         )}
 
-        {/* NGO Actions */}
         {campaign.status === 0 && wallet.account?.toLowerCase() === campaign.ngoAddress.toLowerCase() && (
            <button onClick={handleStartCampaign} className="neo-btn" style={{ background: "var(--accent)" }}>
              Start Campaign & Lock Donations
            </button>
         )}
 
-        {/* Donor Actions */}
         {campaign.status === 1 && (
            <button onClick={handleCancelStalled} className="neo-btn mt-4" style={{ background: "var(--danger)", color: "white" }}>
              Cancel Stalled Campaign (If NGO Ghosted)

@@ -7,7 +7,7 @@ import { WagmiProvider } from 'wagmi'
 import { sepolia } from 'wagmi/chains'
 import './index.css'
 import App from './components/App.tsx'
-import { wagmiConfig } from './wallet.ts'
+import { wagmiConfig } from './blockchain.ts'
 
 const queryClient = new QueryClient()
 

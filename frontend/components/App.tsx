@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
-import { useWallet } from "../wallet";
+import { useWallet } from "../blockchain";
 import Navbar from "./Navbar";
 import Footer from "./Footer";
 import Home from "./Home";

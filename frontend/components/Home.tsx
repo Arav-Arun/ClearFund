@@ -1,20 +1,16 @@
 import { Link } from "react-router-dom";
-import { useAllCampaigns } from "../campaigns";
-import { formatEth } from "../format";
-import { CAMPAIGN_STATUS } from "../chain";
-import type { WalletState } from "../types";
+import { CAMPAIGN_STATUS, formatEth, useAllCampaigns } from "../blockchain";
+import type { WalletState } from "../blockchain";
 
 export default function Home({ wallet }: { wallet: WalletState }) {
   const { campaigns, loading, error } = useAllCampaigns(wallet.provider);
 
-  // Stats calculation
   const totalRaised = campaigns.reduce((acc, c) => acc + c.raisedAmount, 0n);
   const activeCount = campaigns.filter(c => c.status === 1).length;
   const completedCount = campaigns.filter(c => c.status === 2).length;
 
   return (
     <div className="page-container">
-      {/* ── Hero Section ── */}
       <section className="text-center mb-16 pt-8">
         <h1 className="hero-headline">
           Donate with <br />
@@ -46,7 +42,6 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         </div>
       </section>
 
-      {/* ── How It Works ── */}
       <section className="mb-24" style={{ marginTop: "48px" }}>
         <h2 className="text-center font-extrabold text-3xl mb-12 uppercase tracking-tight" style={{ color: "var(--accent)" }}>
           How It Works
@@ -79,7 +74,6 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         </div>
       </section>
 
-      {/* ── Stats ── */}
       <section className="stats-grid mb-24">
         <div className="stat-box">
           <div className="stat-value">{campaigns.length}</div>
@@ -99,7 +93,6 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         </div>
       </section>
 
-      {/* ── Active Campaigns ── */}
       <section id="active-campaigns" style={{ paddingTop: "40px" }}>
         <div className="active-header-box mb-8">
           Active Campaigns
@@ -113,7 +106,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         ) : error ? (
           <div className="empty-state">
             <p className="font-bold text-2xl text-secondary">{error}</p>
-            <p className="mt-2">The default public Sepolia RPC is set in frontend/chain.ts.</p>
+            <p className="mt-2">The default public Sepolia RPC is set in frontend/blockchain.ts.</p>
           </div>
         ) : campaigns.length === 0 ? (
           <div className="empty-state">

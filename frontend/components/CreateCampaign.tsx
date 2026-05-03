@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ethers } from "ethers";
-import { FACTORY_ADDRESS, FACTORY_ABI } from "../chain";
-import type { WalletState } from "../types";
+import { FACTORY_ADDRESS, FACTORY_ABI } from "../blockchain";
+import type { WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
 export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
@@ -76,7 +76,6 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
       await tx.wait();
       toast.success("Campaign created successfully!", { id: "tx" });
       
-      // Reset form
       setTitle("");
       setDescription("");
       setNgoName("");

@@ -27,19 +27,21 @@ Main frontend files:
 
 ```txt
 frontend/
-  api/analyze.js
+  api/analyze.js      Serverless AI oracle endpoint
   assets/
   components/
-  campaigns.ts
-  chain.ts
-  wallet.ts
-  types.ts
+  blockchain.ts       Wallet, chain config, ABIs, campaign reads
+  index.css
+  index.html
   main.tsx
+  package.json
+  tsconfig.json
+  vite.config.ts
 ```
 
-`chain.ts` has the deployed factory address, Sepolia RPC fallback, and contract
-ABIs. Active Campaigns are read from the factory contract through the Sepolia
-RPC. The default RPC is:
+`blockchain.ts` has the deployed factory address, Sepolia RPC fallback, contract
+ABIs, RainbowKit wallet setup, and campaign read hooks. Active Campaigns are
+read from the factory contract through the Sepolia RPC. The default RPC is:
 
 ```txt
 https://ethereum-sepolia-rpc.publicnode.com
