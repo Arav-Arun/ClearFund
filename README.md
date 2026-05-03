@@ -33,8 +33,9 @@ properly. ClearFund moves that trust into a transparent workflow:
 | Milestone payouts | Funds are split across NGO-defined milestones. |
 | Bootstrap release | A 1-15% bootstrap tranche is released when fundraising passes the start threshold. |
 | Live evidence | NGOs must capture evidence through the browser camera. No file upload field is exposed. |
+| Public proof images | The captured JPEG is stored as a public proof URL, then that URL is written on-chain for donor review. |
 | Location permission | Browser geolocation is requested during evidence capture. No manual location input is used. |
-| AI oracle | The Vercel API route sends the live photo, location, and milestone text to OpenAI, then records the AI recommendation and explanation on-chain. |
+| AI oracle | The Vercel API route sends the live photo, location, and milestone text to OpenAI, then stores the visible AI recommendation and explanation. |
 | Donor veto | Donors can vote no during the 24-hour review window. Non-voters accept the AI recommendation when the window ends. |
 | Majority rule | A milestone is rejected only if veto votes become a strict donor majority. |
 | Refund path | If the campaign is cancelled or fundraising fails, donors can claim proportional refunds from the remaining balance. |
@@ -49,18 +50,20 @@ properly. ClearFund moves that trust into a transparent workflow:
 4. The campaign contract releases the bootstrap tranche to the NGO.
 5. For each milestone, the NGO opens the live camera, allows location access,
    captures a fresh photo, and submits the milestone on-chain.
-6. The frontend sends the photo, location, capture timestamp, campaign address,
-   and milestone id to `frontend/api/analyze.js`.
-7. The oracle checks that the campaign is registered, rejects stale evidence,
-   asks the model for an `APPROVE` or `REJECT`, and records what the AI saw plus
+6. The frontend uploads the live JPEG to proof storage and writes the public
+   proof URL on-chain with `submitMilestone`.
+7. The frontend sends the photo, location, capture timestamp, proof URL,
+   campaign address, and milestone id to `frontend/api/analyze.js`.
+8. The oracle checks that the campaign is registered, rejects stale evidence,
+   asks the model for an `APPROVE` or `REJECT`, and stores what the AI saw plus
    why it recommended that outcome.
-8. Approval and rejection both enter the same 24-hour donor review window.
-9. Donors may vote no by calling `vetoMilestone`; doing nothing accepts the AI
+9. Approval and rejection both enter the same 24-hour donor review window.
+10. Donors may vote no by calling `vetoMilestone`; doing nothing accepts the AI
    recommendation.
-10. After 24 hours, anyone can call `executeMilestone` to finalize the review.
-11. If no strict donor majority voted no, the AI recommendation becomes final:
+11. After 24 hours, anyone can call `executeMilestone` to finalize the review.
+12. If no strict donor majority voted no, the AI recommendation becomes final:
     approval releases funds, rejection keeps funds locked for resubmission.
-12. If a strict majority voted no, the milestone is rejected. The NGO may
+13. If a strict majority voted no, the milestone is rejected. The NGO may
     resubmit before the deadline. If the deadline is missed, donors can cancel
     and refund the remaining escrow.
 
@@ -74,10 +77,13 @@ flowchart TD
     Campaign -->|"bootstrap and milestones"| NGO
 
     NGO -->|"live camera capture"| Frontend["React + Vite frontend"]
-    Frontend -->|"photo + location + timestamp"| Oracle["Vercel API: /api/analyze"]
+    Frontend -->|"upload public proof"| Blob["Vercel Blob proof storage"]
+    Blob -->|"proof image URL"| Campaign
+    Frontend -->|"photo + location + timestamp + proof URL"| Oracle["Vercel API: /api/analyze"]
     Oracle -->|"vision check"| OpenAI["OpenAI vision model"]
     OpenAI -->|"APPROVE or REJECT"| Oracle
     Oracle -->|"AI review + reason"| Campaign
+    Oracle -->|"visible review JSON"| Blob
 
     Campaign -->|"24-hour review window"| Donor
     Donor -->|"optional veto vote"| Campaign
@@ -183,8 +189,12 @@ evidence. The intended evidence flow is:
 2. Browser asks for location permission and camera permission.
 3. The app shows a live camera preview.
 4. NGO captures a JPEG frame from the live stream.
-5. The app sends the JPEG, browser location, and timestamp to the oracle.
-6. The oracle rejects stale captures before calling the model.
+5. The app uploads the JPEG to proof storage and writes the public image URL
+   into the milestone submission on-chain.
+6. The app sends the JPEG, browser location, timestamp, and proof URL to the
+   oracle.
+7. The oracle rejects stale captures before calling the model.
+8. Donors can see the proof image, AI decision, and AI analysis before voting.
 
 Important security note: browser camera and geolocation reduce lazy fraud, but
 they are not perfect proof of reality. That is why ClearFund keeps the donor
@@ -245,8 +255,10 @@ Server-side variables for `frontend/api/analyze.js`:
 
 ```txt
 OPENAI_API_KEY=your_openai_key
+AI_MODEL=openai_vision_model_name
 PRIVATE_KEY=oracle_wallet_private_key
 SEPOLIA_RPC_URL=server_sepolia_rpc_url
+BLOB_READ_WRITE_TOKEN=vercel_blob_token_for_public_proof_images
 ```
 
 The oracle API reuses the public `VITE_FACTORY_*` address variables so the same

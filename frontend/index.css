@@ -504,6 +504,31 @@ label {
   font-size: 13px;
 }
 
+.proof-box {
+  display: grid;
+  gap: 10px;
+  border-top: 2px solid var(--border);
+  padding-top: 16px;
+}
+
+.proof-image {
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.proof-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
 .camera-box {
   display: grid;
   gap: 12px;
@@ -680,6 +705,10 @@ label {
 
   .neo-card {
     padding: 18px;
+  }
+
+  .proof-image {
+    max-height: 360px;
   }
 
   .footer-content {

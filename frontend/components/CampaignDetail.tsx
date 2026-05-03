@@ -12,6 +12,10 @@ import type { AIReviewInfo, WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
 type OracleResult = AIReviewInfo & {
+  decision?: string;
+  evidenceUrl?: string;
+  locationStr?: string;
+  capturedAt?: number;
   warning?: string;
   chainUpdated?: boolean;
 };
@@ -31,6 +35,10 @@ function getLiveLocation() {
       timeout: 15000,
     });
   });
+}
+
+function isPublicProofUrl(value: string | undefined) {
+  return !!value && /^https:\/\//i.test(value);
 }
 
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
@@ -62,6 +70,46 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   }, [evidenceMilestoneId]);
 
   useEffect(() => stopCamera, []);
+
+  useEffect(() => {
+    if (!address || milestones.length === 0) return;
+
+    let active = true;
+    Promise.all(
+      milestones.filter((milestone) => milestone.id > 0).map(async (milestone) => {
+        const response = await fetch(`/api/analyze?campaignAddress=${address}&milestoneId=${milestone.id}`);
+        if (!response.ok) return null;
+        const review = await response.json();
+        return [milestone.id, {
+          exists: true,
+          approved: !!review.approved,
+          decision: review.decision,
+          summary: review.summary,
+          reviewedAt: Number(review.reviewedAt || 0),
+          evidenceUrl: review.evidenceUrl,
+          locationStr: review.locationStr,
+          capturedAt: review.capturedAt,
+          warning: review.warning,
+          chainUpdated: review.chainUpdated,
+        }] as const;
+      })
+    ).then((rows) => {
+      if (!active) return;
+      const next = rows.filter(Boolean) as Array<readonly [number, OracleResult]>;
+      if (next.length === 0) return;
+
+      setOracleResults((current) => ({
+        ...current,
+        ...Object.fromEntries(next),
+      }));
+    }).catch(() => {
+      // Reviews are extra context; chain reads should still render without them.
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [address, milestones]);
 
   if (loading) {
     return <div className="page-container"><div className="empty-state">Loading campaign...</div></div>;
@@ -209,7 +257,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     setLocationStr("");
   };
 
-  const sendToOracle = async (milestoneId: number) => {
+  const uploadProof = async (milestoneId: number) => {
     if (!address || !evidenceImage || !capturedAt || !locationStr) {
       throw new Error("Live camera photo and location required");
     }
@@ -218,11 +266,36 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        action: "upload",
         campaignAddress: address,
         milestoneId,
         imageB64: evidenceImage,
         locationStr,
         capturedAt,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({ error: "Proof upload failed" }));
+    if (!response.ok || result.error) throw new Error(result.error || "Proof upload failed");
+    return result.evidenceUrl as string;
+  };
+
+  const sendToOracle = async (milestoneId: number, evidenceUrl: string) => {
+    if (!address || !evidenceImage || !capturedAt || !locationStr) {
+      throw new Error("Live camera photo and location required");
+    }
+
+    const response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "review",
+        campaignAddress: address,
+        milestoneId,
+        imageB64: evidenceImage,
+        locationStr,
+        capturedAt,
+        evidenceUrl,
       }),
     });
 
@@ -235,8 +308,10 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         [milestoneId]: {
           exists: true,
           approved: result.decision === "APPROVE",
+          decision: result.decision,
           summary: result.summary,
           reviewedAt: Math.floor(Date.now() / 1000),
+          evidenceUrl: result.evidenceUrl || evidenceUrl,
           warning: result.warning,
           chainUpdated: result.chainUpdated,
         },
@@ -257,17 +332,18 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
     try {
       setSubmittingMilestone(milestoneId);
-      
-      const simulatedUploadUrl = `live-camera:${capturedAt}`;
+
+      toast.loading("Uploading public proof...", { id: "submit" });
+      const evidenceUrl = await uploadProof(milestoneId);
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
-      const tx = await contract.submitMilestone(milestoneId, simulatedUploadUrl);
+      const tx = await contract.submitMilestone(milestoneId, evidenceUrl);
       
       toast.loading("Submitting to blockchain...", { id: "submit" });
       await tx.wait();
       toast.success("Submitted on-chain! Sending to AI Oracle...", { id: "submit" });
 
       try {
-        await sendToOracle(milestoneId);
+        await sendToOracle(milestoneId, evidenceUrl);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Request failed";
         toast.error(`Oracle Error: ${message}. Retry in a few seconds.`, { id: "submit" });
@@ -289,8 +365,10 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
     try {
       setSubmittingMilestone(milestoneId);
+      toast.loading("Uploading public proof...", { id: "submit" });
+      const evidenceUrl = await uploadProof(milestoneId);
       toast.loading("Sending to AI Oracle...", { id: "submit" });
-      await sendToOracle(milestoneId);
+      await sendToOracle(milestoneId, evidenceUrl);
       refetch();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Oracle request failed";
@@ -411,8 +489,21 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       <h2 className="section-title">Milestones</h2>
       <div className="flex flex-col gap-4">
         {milestones.map((milestone) => {
-          const review = milestone.aiReview?.exists ? milestone.aiReview : oracleResults[milestone.id];
+          const offchainReview = oracleResults[milestone.id];
+          const chainReview: OracleResult | undefined = milestone.aiReview?.exists
+            ? {
+                ...milestone.aiReview,
+                decision: milestone.aiReview.approved ? "APPROVE" : "REJECT",
+                chainUpdated: true,
+              }
+            : undefined;
+          const review = offchainReview || chainReview;
           const canSubmitProof = isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 1 || milestone.status === 4);
+          const proofUrl = isPublicProofUrl(milestone.evidenceUrl)
+            ? milestone.evidenceUrl
+            : isPublicProofUrl(offchainReview?.evidenceUrl) ? offchainReview.evidenceUrl : "";
+          const proofMissing = milestone.id > 0 && milestone.status > 0 && !proofUrl;
+          const reviewColor = review ? (review.approved ? "var(--success)" : "var(--danger)") : "var(--warning)";
 
           return (
             <div key={milestone.id} className="neo-card milestone-card">
@@ -431,6 +522,24 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                   Deadline: {milestone.id === 0 ? "Released at start" : new Date(milestone.deadline * 1000).toLocaleDateString()}
                 </span>
               </div>
+
+              {proofUrl && (
+                <div className="proof-box mb-4">
+                  <img src={proofUrl} alt={`${milestone.title} proof`} className="proof-image" />
+                  <div className="proof-meta">
+                    <span>Public proof image</span>
+                    <a href={proofUrl} target="_blank" rel="noreferrer" className="text-accent font-bold">
+                      Open full image
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              {proofMissing && (
+                <div className="notice-box mb-4">
+                  This older submission did not store a public proof image. The NGO must capture fresh live evidence so voters can inspect the photo.
+                </div>
+              )}
 
               {canSubmitProof && (
                 <div className="camera-box mt-4">
@@ -478,11 +587,26 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
               {milestone.status === 1 && (
                 <div className="review-box mt-4">
-                  <p className="mb-2 text-sm font-bold" style={{ color: 'var(--warning)' }}>
-                    Proof is submitted on-chain. AI Oracle review is pending.
+                  <p className="mb-2 text-sm font-bold" style={{ color: reviewColor }}>
+                    {review
+                      ? `AI analyzed this proof and recommends ${review.approved ? "approval" : "rejection"}.`
+                      : "Proof is submitted on-chain. AI Oracle review is pending."}
                   </p>
                   {review?.summary && (
                     <p className="text-xs text-secondary whitespace-pre-line">{review.summary}</p>
+                  )}
+                  {review?.warning && (
+                    <p className="text-xs text-secondary mt-2">{review.warning}</p>
+                  )}
+                  {proofUrl && (
+                    <p className="text-xs text-secondary mt-2">
+                      Donors can see the proof image above. Voting starts after the oracle writes the review on-chain.
+                    </p>
+                  )}
+                  {review && (
+                    <p className="text-xs text-secondary mt-2">
+                      The vote button appears only after the smart contract status changes from Submitted to 24h Review.
+                    </p>
                   )}
                   {isNgo && (
                     <p className="text-xs text-secondary mt-2">
@@ -494,11 +618,15 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
               {milestone.status === 2 && (
                 <div className="review-box mt-4">
-                  <p className="mb-2 text-sm font-bold" style={{ color: review ? (review.approved ? 'var(--success)' : 'var(--danger)') : 'var(--warning)' }}>
+                  <p className="mb-2 text-sm font-bold" style={{ color: reviewColor }}>
                     {review ? `AI recommends ${review.approved ? "approval" : "rejection"}.` : "AI review recorded."} 24-hour donor review active.
                   </p>
-                  {review?.summary && (
+                  {review?.summary ? (
                     <p className="text-xs mb-3 text-secondary whitespace-pre-line">{review.summary}</p>
+                  ) : (
+                    <p className="text-xs mb-3 text-secondary">
+                      The vote window is open. AI analysis is loading from review storage.
+                    </p>
                   )}
                   <p className="text-xs mb-4 text-secondary">
                     Final outcome can be announced after {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}. Not voting accepts the AI recommendation. Veto votes recorded: {milestone.vetoVotes}/{milestone.donorCount || "?"}.
@@ -507,7 +635,17 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                     <div className="notice-box mb-4">
                       {isNgo
                         ? "Donors and the NGO should watch this review window. Nothing becomes final until the 24 hours finish."
-                        : "You are a donor. Vote no only if you want to block this milestone; doing nothing counts as yes."}
+                      : "You are a donor. Vote no only if you want to block this milestone; doing nothing counts as yes."}
+                    </div>
+                  )}
+                  {!wallet.account && (
+                    <div className="notice-box mb-4">
+                      Connect the donor wallet used for this campaign to vote no. Anyone can still inspect the proof and AI analysis.
+                    </div>
+                  )}
+                  {wallet.account && !isDonor && !isNgo && (
+                    <div className="notice-box mb-4">
+                      Only donors in this campaign can vote. This wallet can view the proof, but cannot cast a veto.
                     </div>
                   )}
                   <div className="flex gap-4 mt-4">

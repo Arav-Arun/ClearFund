@@ -1,7 +1,9 @@
+import { list, put } from "@vercel/blob";
 import { ethers } from "ethers";
 import OpenAI from "openai";
 
 const RPC_URL = envValue("SEPOLIA_RPC_URL") || envValue("VITE_SEPOLIA_RPC_URL");
+const AI_MODEL = envValue("AI_MODEL");
 const BLOCKED_FACTORY_ADDRESSES = addressSet(
   envValue("BLOCKED_FACTORY_ADDRESSES") || envValue("VITE_BLOCKED_FACTORY_ADDRESSES")
 );
@@ -74,6 +76,123 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function reviewPath(campaignAddress, milestoneId) {
+  return `reviews/${campaignAddress.toLowerCase()}/${milestoneId}.json`;
+}
+
+function proofPath(campaignAddress, milestoneId, capturedAt) {
+  return `proofs/${campaignAddress.toLowerCase()}/${milestoneId}-${capturedAt}.jpg`;
+}
+
+function hasBlobStore() {
+  return !!envValue("BLOB_READ_WRITE_TOKEN");
+}
+
+function requireBlobStore() {
+  if (!hasBlobStore()) {
+    throw new Error("Proof storage is not configured. Add BLOB_READ_WRITE_TOKEN in Vercel.");
+  }
+}
+
+function imageBuffer(imageB64) {
+  return Buffer.from(imageB64.replace("data:image/jpeg;base64,", ""), "base64");
+}
+
+async function saveProof({ campaignAddress, milestoneId, imageB64, capturedAt }) {
+  requireBlobStore();
+
+  const blob = await put(
+    proofPath(campaignAddress, milestoneId, capturedAt),
+    imageBuffer(imageB64),
+    {
+      access: "public",
+      allowOverwrite: true,
+      contentType: "image/jpeg",
+      cacheControlMaxAge: 31536000,
+    }
+  );
+
+  return blob.url;
+}
+
+async function saveReview(review) {
+  if (!hasBlobStore()) return "";
+
+  try {
+    const blob = await put(
+      reviewPath(review.campaignAddress, review.milestoneId),
+      JSON.stringify(review, null, 2),
+      {
+        access: "public",
+        allowOverwrite: true,
+        contentType: "application/json",
+        cacheControlMaxAge: 60,
+      }
+    );
+
+    return blob.url;
+  } catch (error) {
+    console.error("Review storage failed:", error);
+    return "";
+  }
+}
+
+async function loadReview(campaignAddress, milestoneId) {
+  if (!hasBlobStore()) return null;
+
+  try {
+    const result = await list({
+      prefix: reviewPath(campaignAddress, milestoneId),
+      limit: 1,
+    });
+    const [blob] = result.blobs;
+    if (!blob) return null;
+
+    const response = await fetch(blob.url, { cache: "no-store" });
+    if (!response.ok) return null;
+    return response.json();
+  } catch (error) {
+    console.error("Review lookup failed:", error);
+    return null;
+  }
+}
+
+function validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr, capturedAt }) {
+  if (!ethers.isAddress(campaignAddress)) {
+    return "Invalid campaign address.";
+  }
+
+  if (!Number.isInteger(milestoneId) || milestoneId < 0) {
+    return "Invalid milestone id.";
+  }
+
+  if (typeof imageB64 !== "string" || !imageB64.startsWith("data:image/jpeg;base64,")) {
+    return "Live camera photo is required.";
+  }
+
+  if (imageB64.length > 5_000_000) {
+    return "Image is too large.";
+  }
+
+  if (!Number.isInteger(capturedAt) || Math.abs(Date.now() - capturedAt) > 5 * 60 * 1000) {
+    return "Evidence capture is stale.";
+  }
+
+  if (typeof locationStr !== "string" || !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(locationStr)) {
+    return "Invalid location.";
+  }
+
+  return "";
+}
+
+function validateProofUrl(evidenceUrl) {
+  if (typeof evidenceUrl !== "string" || evidenceUrl.length > 2048 || !/^https:\/\//i.test(evidenceUrl)) {
+    return "Public proof image URL is required.";
+  }
+
+  return "";
+}
+
 function cleanOracleError(error) {
   const message = [
     error?.reason,
@@ -81,6 +200,10 @@ function cleanOracleError(error) {
     error?.info?.error?.message,
     error?.message,
   ].filter(Boolean).join(" ");
+
+  if (/proof storage|blob_read_write_token|blob token/i.test(message)) {
+    return "Proof storage is not configured. Add BLOB_READ_WRITE_TOKEN in Vercel.";
+  }
 
   if (/not submitted|proof is not submitted/i.test(message)) {
     return "Proof is not visible to the oracle yet. Wait a few seconds and retry.";
@@ -94,8 +217,11 @@ function cleanOracleError(error) {
 }
 
 function parseReview(raw) {
+  const content = String(raw || "").trim();
+
   try {
-    const parsed = JSON.parse(raw || "{}");
+    const jsonText = content.match(/\{[\s\S]*\}/)?.[0] || content || "{}";
+    const parsed = JSON.parse(jsonText);
     const decision = String(parsed.decision || "").toUpperCase();
     const observations = String(parsed.observations || "").replace(/[^\x20-\x7E\n]/g, "").trim();
     const reason = String(parsed.reason || "").replace(/[^\x20-\x7E\n]/g, "").trim();
@@ -110,10 +236,15 @@ function parseReview(raw) {
       summary: `Observed: ${observations || "No clear visual evidence."}\nReason: ${reason || "The evidence was not strong enough."}`.slice(0, 680),
     };
   } catch {
+    const text = content.replace(/[^\x20-\x7E\n]/g, "").trim();
+    const approved = /\bAPPROVE\b/i.test(text) && !/\bREJECT\b/i.test(text);
+
     return {
-      approved: false,
-      decision: "REJECT",
-      summary: "Observed: The oracle response could not be parsed.\nReason: The evidence was rejected because the AI review was inconclusive.",
+      approved,
+      decision: approved ? "APPROVE" : "REJECT",
+      summary: text
+        ? `Observed: ${text.slice(0, 500)}\nReason: The model returned text instead of structured JSON, so the raw analysis is shown.`
+        : "Observed: No AI analysis was returned.\nReason: The evidence was rejected because the AI review was inconclusive.",
     };
   }
 }
@@ -145,73 +276,86 @@ async function waitForSubmittedMilestone(contract, milestoneId) {
   return { error: "Proof is not visible on-chain yet. Wait a few seconds and retry." };
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+async function isRegisteredCampaign(provider, campaignAddress) {
+  const normalizedCampaign = campaignAddress.toLowerCase();
+
+  for (const factoryAddress of FACTORY_ADDRESSES) {
+    if (!ethers.isAddress(factoryAddress)) continue;
+
+    try {
+      const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
+      const campaigns = await factory.getAllCampaigns();
+      if (campaigns.some((address) => address.toLowerCase() === normalizedCampaign)) {
+        return true;
+      }
+    } catch (err) {
+      console.error("Factory lookup failed:", factoryAddress, err);
+    }
   }
 
+  return false;
+}
+
+async function saveReviewResult(review, warning = "") {
+  const reviewUrl = await saveReview(warning ? { ...review, warning } : review);
+  return { reviewUrl, warning };
+}
+
+function assertServerConfig() {
+  if (!RPC_URL) return "Sepolia RPC URL is not configured.";
+  if (FACTORY_ADDRESSES.length === 0) return "Factory addresses are not configured.";
+  return "";
+}
+
+export default async function handler(req, res) {
   try {
-    const { campaignAddress, milestoneId, imageB64, locationStr, capturedAt } = req.body;
-    const apiKey = process.env.OPENAI_API_KEY;
-    const privateKey = process.env.PRIVATE_KEY;
+    if (req.method === "GET") {
+      const campaignAddress = String(req.query.campaignAddress || "");
+      const milestoneId = Number(req.query.milestoneId);
 
-    if (!apiKey || !privateKey) {
-      return res.status(500).json({ error: "Oracle is not configured." });
+      if (!ethers.isAddress(campaignAddress) || !Number.isInteger(milestoneId)) {
+        return res.status(400).json({ error: "Invalid review lookup." });
+      }
+
+      const review = await loadReview(campaignAddress, milestoneId);
+      return review
+        ? res.status(200).json(review)
+        : res.status(404).json({ error: "No AI review found." });
     }
 
-    if (!RPC_URL) {
-      return res.status(500).json({ error: "Sepolia RPC URL is not configured." });
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
     }
 
-    if (FACTORY_ADDRESSES.length === 0) {
-      return res.status(500).json({ error: "Factory addresses are not configured." });
-    }
+    const { action = "review", campaignAddress, milestoneId, imageB64, locationStr, capturedAt, evidenceUrl } = req.body;
+    const configError = assertServerConfig();
+    if (configError) return res.status(500).json({ error: configError });
 
-    if (!ethers.isAddress(campaignAddress)) {
-      return res.status(400).json({ error: "Invalid campaign address." });
-    }
-
-    if (!Number.isInteger(milestoneId) || milestoneId < 0) {
-      return res.status(400).json({ error: "Invalid milestone id." });
-    }
-
-    if (typeof imageB64 !== "string" || !imageB64.startsWith("data:image/jpeg;base64,")) {
-      return res.status(400).json({ error: "Live camera photo is required." });
-    }
-
-    if (imageB64.length > 5_000_000) {
-      return res.status(413).json({ error: "Image is too large." });
-    }
-
-    if (!Number.isInteger(capturedAt) || Math.abs(Date.now() - capturedAt) > 5 * 60 * 1000) {
-      return res.status(400).json({ error: "Evidence capture is stale." });
-    }
-
-    if (typeof locationStr !== "string" || !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(locationStr)) {
-      return res.status(400).json({ error: "Invalid location." });
-    }
+    const evidenceError = validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr, capturedAt });
+    if (evidenceError) return res.status(400).json({ error: evidenceError });
 
     const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const normalizedCampaign = campaignAddress.toLowerCase();
-    let isRegistered = false;
-
-    for (const factoryAddress of FACTORY_ADDRESSES) {
-      if (!ethers.isAddress(factoryAddress)) continue;
-
-      try {
-        const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
-        const campaigns = await factory.getAllCampaigns();
-        if (campaigns.some((address) => address.toLowerCase() === normalizedCampaign)) {
-          isRegistered = true;
-          break;
-        }
-      } catch (err) {
-        console.error("Factory lookup failed:", factoryAddress, err);
-      }
+    if (!(await isRegisteredCampaign(provider, campaignAddress))) {
+      return res.status(403).json({ error: "Campaign is not registered." });
     }
 
-    if (!isRegistered) {
-      return res.status(403).json({ error: "Campaign is not registered." });
+    if (action === "upload") {
+      const url = await saveProof({ campaignAddress, milestoneId, imageB64, capturedAt });
+      return res.status(200).json({ evidenceUrl: url });
+    }
+
+    if (action !== "review") {
+      return res.status(400).json({ error: "Unknown oracle action." });
+    }
+
+    const proofUrlError = validateProofUrl(evidenceUrl);
+    if (proofUrlError) return res.status(400).json({ error: proofUrlError });
+
+    const apiKey = envValue("OPENAI_API_KEY");
+    const privateKey = envValue("PRIVATE_KEY");
+
+    if (!apiKey || !privateKey || !AI_MODEL) {
+      return res.status(500).json({ error: "Oracle is not configured." });
     }
 
     const wallet = new ethers.Wallet(privateKey, provider);
@@ -229,7 +373,7 @@ export default async function handler(req, res) {
     const openai = new OpenAI({ apiKey });
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: AI_MODEL,
       messages: [
         {
           role: "system",
@@ -249,38 +393,74 @@ export default async function handler(req, res) {
 
     const review = parseReview(response.choices[0].message.content);
     const supportsReview = await supportsAIReview(provider, campaignAddress);
+    const baseReview = {
+      campaignAddress,
+      milestoneId,
+      evidenceUrl,
+      locationStr,
+      capturedAt,
+      decision: review.decision,
+      approved: review.approved,
+      summary: review.summary,
+      reviewedAt: Math.floor(Date.now() / 1000),
+    };
 
     if (supportsReview) {
-      const tx = await contract.oracleReviewMilestone(milestoneId, review.approved, review.summary);
-      await tx.wait();
-      return res.status(200).json({
-        status: "24-hour review window opened",
-        decision: review.decision,
-        summary: review.summary,
-        txHash: tx.hash,
-        chainUpdated: true,
-      });
+      try {
+        const tx = await contract.oracleReviewMilestone(milestoneId, review.approved, review.summary);
+        await tx.wait();
+        const { reviewUrl } = await saveReviewResult({ ...baseReview, txHash: tx.hash, chainUpdated: true });
+        return res.status(200).json({
+          status: "24-hour review window opened",
+          decision: review.decision,
+          summary: review.summary,
+          evidenceUrl,
+          reviewUrl,
+          txHash: tx.hash,
+          chainUpdated: true,
+        });
+      } catch (error) {
+        const warning = `${cleanOracleError(error)} The AI analysis is saved, but donor voting starts only after the on-chain 24-hour review opens.`;
+        const { reviewUrl } = await saveReviewResult({ ...baseReview, chainUpdated: false }, warning);
+        return res.status(200).json({
+          status: "AI analyzed proof, but on-chain review did not open",
+          decision: review.decision,
+          summary: review.summary,
+          evidenceUrl,
+          reviewUrl,
+          chainUpdated: false,
+          warning,
+        });
+      }
     }
 
     if (review.approved) {
       const tx = await contract.oracleApproveMilestone(milestoneId);
       await tx.wait();
+      const warning = "This legacy campaign cannot store the AI explanation on-chain.";
+      const { reviewUrl } = await saveReviewResult({ ...baseReview, txHash: tx.hash, chainUpdated: true }, warning);
       return res.status(200).json({
         status: "24-hour review window opened",
         decision: review.decision,
         summary: review.summary,
+        evidenceUrl,
+        reviewUrl,
         txHash: tx.hash,
         chainUpdated: true,
-        warning: "This legacy campaign cannot store the AI explanation on-chain.",
+        warning,
       });
     }
 
+    const warning = "This legacy campaign cannot run a 24-hour rejection review, so the oracle did not reject it on-chain.";
+    const { reviewUrl } = await saveReviewResult({ ...baseReview, chainUpdated: false }, warning);
     return res.status(200).json({
       status: "AI recommends rejection",
       decision: review.decision,
       summary: review.summary,
+      evidenceUrl,
+      reviewUrl,
       chainUpdated: false,
-      warning: "This legacy campaign cannot run a 24-hour rejection review, so the oracle did not reject it on-chain.",
+      warning,
     });
 
   } catch (error) {
