@@ -203,6 +203,30 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     setLocationStr("");
   };
 
+  const sendToOracle = async (milestoneId: number) => {
+    if (!address || !evidenceImage || !capturedAt || !locationStr) {
+      throw new Error("Live camera photo and location required");
+    }
+
+    const response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        campaignAddress: address,
+        milestoneId,
+        imageB64: evidenceImage,
+        locationStr,
+        capturedAt,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({ error: "Oracle request failed" }));
+    if (!response.ok || result.error) throw new Error(result.error || "Request failed");
+
+    toast.success(`AI Oracle Decision: ${result.status}`, { id: "submit" });
+    clearEvidence();
+  };
+
   const handleSubmitMilestone = async (milestoneId: number) => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
     if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
@@ -220,30 +244,36 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       toast.loading("Submitting to blockchain...", { id: "submit" });
       await tx.wait();
       toast.success("Submitted on-chain! Sending to AI Oracle...", { id: "submit" });
-      
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaignAddress: address,
-          milestoneId,
-          imageB64: evidenceImage,
-          locationStr,
-          capturedAt,
-        }),
-      });
 
-      const result = await response.json().catch(() => ({ error: "Oracle request failed" }));
-      if (!response.ok || result.error) {
-        toast.error(`Oracle Error: ${result.error || "Request failed"}`, { id: "submit" });
-      } else {
-        toast.success(`AI Oracle Decision: ${result.status}`, { id: "submit" });
+      try {
+        await sendToOracle(milestoneId);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Request failed";
+        toast.error(`Oracle Error: ${message}. Retry in a few seconds.`, { id: "submit" });
       }
       refetch();
-
-      clearEvidence();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to submit", { id: "submit" });
+    } finally {
+      setSubmittingMilestone(null);
+    }
+  };
+
+  const handleRetryOracle = async (milestoneId: number) => {
+    if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
+    if (!evidenceImage || !capturedAt || !locationStr || evidenceMilestoneId !== milestoneId) {
+      return toast.error("Capture a fresh live photo first");
+    }
+
+    try {
+      setSubmittingMilestone(milestoneId);
+      toast.loading("Sending to AI Oracle...", { id: "submit" });
+      await sendToOracle(milestoneId);
+      refetch();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Oracle request failed";
+      toast.error(`Oracle Error: ${message}`, { id: "submit" });
     } finally {
       setSubmittingMilestone(null);
     }
@@ -377,7 +407,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
               </span>
             </div>
 
-            {isNgo && milestone.id > 0 && milestone.status === 0 && (
+            {isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 1) && (
               <div className="camera-box mt-4">
                 {evidenceMilestoneId === milestone.id && !evidenceImage && (
                   <video ref={videoRef} className="camera-preview" playsInline muted autoPlay />
@@ -406,9 +436,9 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                     <button
                       className="neo-btn neo-btn-primary"
                       disabled={submittingMilestone === milestone.id}
-                      onClick={() => handleSubmitMilestone(milestone.id)}
+                      onClick={() => milestone.status === 1 ? handleRetryOracle(milestone.id) : handleSubmitMilestone(milestone.id)}
                     >
-                      Submit Evidence
+                      {milestone.status === 1 ? "Retry AI Oracle" : "Submit Evidence"}
                     </button>
                   )}
 
@@ -424,8 +454,13 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             {milestone.status === 1 && (
               <div className="mt-4 p-4 border-t-2" style={{ borderColor: 'var(--border)' }}>
                 <p className="mb-2 text-sm text-yellow-600 font-bold">
-                  AI Oracle is analyzing the evidence...
+                  Proof is submitted on-chain. AI Oracle review is pending.
                 </p>
+                {isNgo && (
+                  <p className="text-xs text-secondary">
+                    If this stays here after an oracle error, capture a fresh live photo above and retry the AI Oracle.
+                  </p>
+                )}
               </div>
             )}
 

@@ -275,6 +275,7 @@ Framework: Vite
 Install Command: npm install
 Build Command: npm run build
 Output Directory: dist
+SPA Rewrite: all non-API paths -> /index.html
 ```
 
 With the root set to `frontend`, the oracle route deploys as:

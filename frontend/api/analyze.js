@@ -21,6 +21,52 @@ const CAMPAIGN_ABI = [
   "function getMilestone(uint256) view returns (tuple(string title, string description, uint256 fundPercent, uint256 deadline, uint8 status, string evidenceUrl, uint256 vetoEndsAt))"
 ];
 
+const MILESTONE_STATUS = {
+  SUBMITTED: 1,
+  IN_VETO: 2,
+  APPROVED: 3,
+  REJECTED: 4,
+};
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cleanOracleError(error) {
+  const message = [
+    error?.reason,
+    error?.shortMessage,
+    error?.info?.error?.message,
+    error?.message,
+  ].filter(Boolean).join(" ");
+
+  if (/not submitted|proof is not submitted/i.test(message)) {
+    return "Proof is not visible to the oracle yet. Wait a few seconds and retry.";
+  }
+
+  if (/caller is not.*oracle|not the oracle/i.test(message)) {
+    return "Oracle wallet does not match this campaign.";
+  }
+
+  return "Oracle request failed.";
+}
+
+async function waitForSubmittedMilestone(contract, milestoneId) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const milestone = await contract.getMilestone(milestoneId);
+    const status = Number(milestone.status);
+
+    if (status === MILESTONE_STATUS.SUBMITTED) return milestone;
+    if (status === MILESTONE_STATUS.IN_VETO) return { done: "Already in veto review." };
+    if (status === MILESTONE_STATUS.APPROVED) return { done: "Already approved." };
+    if (status === MILESTONE_STATUS.REJECTED) return { error: "Milestone was already rejected. Submit fresh proof." };
+
+    await wait(1500);
+  }
+
+  return { error: "Proof is not visible on-chain yet. Wait a few seconds and retry." };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -84,7 +130,16 @@ export default async function handler(req, res) {
 
     const wallet = new ethers.Wallet(privateKey, provider);
     const contract = new ethers.Contract(campaignAddress, CAMPAIGN_ABI, wallet);
-    const milestone = await contract.getMilestone(milestoneId);
+    const milestone = await waitForSubmittedMilestone(contract, milestoneId);
+
+    if (milestone.done) {
+      return res.status(200).json({ status: milestone.done });
+    }
+
+    if (milestone.error) {
+      return res.status(409).json({ error: milestone.error });
+    }
+
     const openai = new OpenAI({ apiKey });
 
     const response = await openai.chat.completions.create({
@@ -119,6 +174,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error("Oracle Error:", error);
-    return res.status(500).json({ error: "Oracle request failed." });
+    return res.status(500).json({ error: cleanOracleError(error) });
   }
 }
