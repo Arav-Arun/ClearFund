@@ -158,13 +158,8 @@ async function loadReview(campaignAddress, milestoneId) {
 }
 
 function validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr, capturedAt }) {
-  if (!ethers.isAddress(campaignAddress)) {
-    return "Invalid campaign address.";
-  }
-
-  if (!Number.isInteger(milestoneId) || milestoneId < 0) {
-    return "Invalid milestone id.";
-  }
+  const idError = validateIds({ campaignAddress, milestoneId });
+  if (idError) return idError;
 
   if (typeof imageB64 !== "string" || !imageB64.startsWith("data:image/jpeg;base64,")) {
     return "Live camera photo is required.";
@@ -190,6 +185,18 @@ function validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr,
   return "";
 }
 
+function validateIds({ campaignAddress, milestoneId }) {
+  if (!ethers.isAddress(campaignAddress)) {
+    return "Invalid campaign address.";
+  }
+
+  if (!Number.isInteger(milestoneId) || milestoneId < 0) {
+    return "Invalid milestone id.";
+  }
+
+  return "";
+}
+
 function validateProofUrl(evidenceUrl) {
   if (typeof evidenceUrl !== "string" || evidenceUrl.length > 2048 || !/^https:\/\//i.test(evidenceUrl)) {
     return "Public proof image URL is required.";
@@ -197,6 +204,48 @@ function validateProofUrl(evidenceUrl) {
 
   return "";
 }
+
+function validateStoredProof(record, evidenceUrl) {
+  if (!record || record.evidenceUrl !== evidenceUrl) {
+    return "Stored proof metadata does not match the on-chain proof.";
+  }
+
+  if (typeof record.locationStr !== "string" || !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(record.locationStr)) {
+    return "Stored proof location is missing.";
+  }
+
+  const [lat, lng] = record.locationStr.split(",").map(Number);
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return "Stored proof location is invalid.";
+  }
+
+  if (!Number.isInteger(Number(record.capturedAt)) || Number(record.capturedAt) <= 0) {
+    return "Stored proof capture time is missing.";
+  }
+
+  return "";
+}
+
+const REVIEW_RESPONSE_FORMATS = [
+  {
+    type: "json_schema",
+    json_schema: {
+      name: "clearfund_ai_review",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          decision: { type: "string", enum: ["APPROVE", "REJECT"] },
+          observations: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["decision", "observations", "reason"],
+      },
+    },
+  },
+  { type: "json_object" },
+];
 
 function cleanOracleError(error) {
   const message = [
@@ -218,11 +267,67 @@ function cleanOracleError(error) {
     return "Oracle wallet does not match this campaign.";
   }
 
+  if (/AI returned no analysis|AI refused|AI did not return|Finish reason/i.test(message)) {
+    return message;
+  }
+
+  if (/image.*not supported|does not support.*image|vision/i.test(message)) {
+    return "AI model cannot analyze images. Set AI_MODEL to a vision-capable OpenAI model such as gpt-4o or gpt-4o-mini.";
+  }
+
+  if (/model.*not found|does not exist|invalid model/i.test(message)) {
+    return "AI model is not available for this API key. Check AI_MODEL in Vercel.";
+  }
+
   return "Oracle request failed.";
+}
+
+function reviewMessages({ milestone, proofLocation, proofCapturedAt, evidenceUrl }) {
+  return [
+    {
+      role: "system",
+      content: "You are an AI Oracle for a decentralized charity fund. Verify whether this public proof image reasonably proves the NGO completed the milestone. Reject screenshots, edited images, irrelevant scenes, or weak evidence. Reply only as JSON with keys decision, observations, and reason. decision must be APPROVE or REJECT.",
+    },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `Milestone: ${milestone.title}\nDescription: ${milestone.description}\nLocation: ${proofLocation}\nCaptured: ${new Date(proofCapturedAt).toISOString()}\nProof URL: ${evidenceUrl}` },
+        { type: "image_url", image_url: { url: evidenceUrl } },
+      ],
+    },
+  ];
+}
+
+function aiText(response) {
+  const choice = response?.choices?.[0];
+  const message = choice?.message || {};
+
+  if (message.refusal) {
+    throw new Error(`AI refused to review the proof: ${message.refusal}`);
+  }
+
+  if (typeof message.content === "string" && message.content.trim()) {
+    return message.content.trim();
+  }
+
+  if (Array.isArray(message.content)) {
+    const text = message.content.map((part) => {
+      if (typeof part === "string") return part;
+      return part?.text || part?.content || "";
+    }).join("\n").trim();
+
+    if (text) return text;
+  }
+
+  const finishReason = choice?.finish_reason || "unknown";
+  throw new Error(`AI returned no analysis text. Finish reason: ${finishReason}. Use a vision-capable OpenAI model such as gpt-4o or gpt-4o-mini.`);
 }
 
 function parseReview(raw) {
   const content = String(raw || "").trim();
+  if (!content) {
+    throw new Error("AI returned no analysis text.");
+  }
 
   try {
     const jsonText = content.match(/\{[\s\S]*\}/)?.[0] || content || "{}";
@@ -242,16 +347,45 @@ function parseReview(raw) {
     };
   } catch {
     const text = content.replace(/[^\x20-\x7E\n]/g, "").trim();
-    const approved = /\bAPPROVE\b/i.test(text) && !/\bREJECT\b/i.test(text);
+    if (!text) throw new Error("AI returned no analysis text.");
+
+    const saysApprove = /\bAPPROVE\b/i.test(text);
+    const saysReject = /\bREJECT\b/i.test(text);
+    if (saysApprove === saysReject) {
+      throw new Error("AI did not return a clear APPROVE or REJECT decision.");
+    }
+
+    const approved = saysApprove;
 
     return {
       approved,
       decision: approved ? "APPROVE" : "REJECT",
-      summary: text
-        ? `Observed: ${text.slice(0, 500)}\nReason: The model returned text instead of structured JSON, so the raw analysis is shown.`
-        : "Observed: No AI analysis was returned.\nReason: The evidence was rejected because the AI review was inconclusive.",
+      summary: `Observed: ${text.slice(0, 500)}\nReason: The model returned text instead of structured JSON, so the raw analysis is shown.`,
     };
   }
+}
+
+async function analyzeProof({ openai, milestone, proofLocation, proofCapturedAt, evidenceUrl }) {
+  let lastError;
+  const messages = reviewMessages({ milestone, proofLocation, proofCapturedAt, evidenceUrl });
+
+  for (const response_format of REVIEW_RESPONSE_FORMATS) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: AI_MODEL,
+        messages,
+        response_format,
+        max_completion_tokens: 500,
+      });
+
+      return parseReview(aiText(response));
+    } catch (error) {
+      lastError = error;
+      console.error("AI review attempt failed:", error);
+    }
+  }
+
+  throw lastError || new Error("AI review failed.");
 }
 
 async function supportsAIReview(provider, campaignAddress) {
@@ -332,12 +466,13 @@ export default async function handler(req, res) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const { action = "review", campaignAddress, milestoneId, imageB64, locationStr, capturedAt, evidenceUrl } = req.body;
+    const body = req.body || {};
+    const { action = "review", campaignAddress, milestoneId, imageB64, locationStr, capturedAt, evidenceUrl } = body;
     const configError = assertServerConfig();
     if (configError) return res.status(500).json({ error: configError });
 
-    const evidenceError = validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr, capturedAt });
-    if (evidenceError) return res.status(400).json({ error: evidenceError });
+    const idError = validateIds({ campaignAddress, milestoneId });
+    if (idError) return res.status(400).json({ error: idError });
 
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     if (!(await isRegisteredCampaign(provider, campaignAddress))) {
@@ -345,8 +480,11 @@ export default async function handler(req, res) {
     }
 
     if (action === "upload") {
+      const evidenceError = validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr, capturedAt });
+      if (evidenceError) return res.status(400).json({ error: evidenceError });
+
       const url = await saveProof({ campaignAddress, milestoneId, imageB64, capturedAt });
-      await saveReview({
+      const recordUrl = await saveReview({
         campaignAddress,
         milestoneId,
         evidenceUrl: url,
@@ -355,6 +493,7 @@ export default async function handler(req, res) {
         reviewedAt: 0,
         chainUpdated: false,
       });
+      if (!recordUrl) return res.status(500).json({ error: "Proof metadata could not be saved." });
 
       return res.status(200).json({ evidenceUrl: url, locationStr, capturedAt });
     }
@@ -365,6 +504,10 @@ export default async function handler(req, res) {
 
     const proofUrlError = validateProofUrl(evidenceUrl);
     if (proofUrlError) return res.status(400).json({ error: proofUrlError });
+
+    const proofRecord = await loadReview(campaignAddress, milestoneId);
+    const storedProofError = validateStoredProof(proofRecord, evidenceUrl);
+    if (storedProofError) return res.status(409).json({ error: storedProofError });
 
     const apiKey = envValue("OPENAI_API_KEY");
     const privateKey = envValue("PRIVATE_KEY");
@@ -385,35 +528,22 @@ export default async function handler(req, res) {
       return res.status(409).json({ error: milestone.error });
     }
 
+    if (String(milestone.evidenceUrl || "") !== evidenceUrl) {
+      return res.status(409).json({ error: "Oracle proof does not match the on-chain proof URL." });
+    }
+
+    const proofLocation = proofRecord.locationStr;
+    const proofCapturedAt = Number(proofRecord.capturedAt);
+
     const openai = new OpenAI({ apiKey });
-
-    const response = await openai.chat.completions.create({
-      model: AI_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: "You are an AI Oracle for a decentralized charity fund. Verify whether this fresh browser-camera photo, captured at the provided GPS location, reasonably proves the NGO completed the milestone. Reject screenshots, edited images, irrelevant scenes, or weak evidence. Reply only as JSON with keys decision, observations, and reason. decision must be APPROVE or REJECT."
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `Milestone: ${milestone.title}\nDescription: ${milestone.description}\nLocation: ${locationStr}\nCaptured: ${new Date(capturedAt).toISOString()}` },
-            { type: "image_url", image_url: { url: imageB64 } }
-          ]
-        }
-      ],
-      response_format: { type: "json_object" },
-      max_tokens: 220,
-    });
-
-    const review = parseReview(response.choices[0].message.content);
+    const review = await analyzeProof({ openai, milestone, proofLocation, proofCapturedAt, evidenceUrl });
     const supportsReview = await supportsAIReview(provider, campaignAddress);
     const baseReview = {
       campaignAddress,
       milestoneId,
       evidenceUrl,
-      locationStr,
-      capturedAt,
+      locationStr: proofLocation,
+      capturedAt: proofCapturedAt,
       decision: review.decision,
       approved: review.approved,
       summary: review.summary,
@@ -431,8 +561,8 @@ export default async function handler(req, res) {
           summary: review.summary,
           evidenceUrl,
           reviewUrl,
-          locationStr,
-          capturedAt,
+          locationStr: proofLocation,
+          capturedAt: proofCapturedAt,
           reviewedAt: baseReview.reviewedAt,
           txHash: tx.hash,
           chainUpdated: true,
@@ -446,8 +576,8 @@ export default async function handler(req, res) {
           summary: review.summary,
           evidenceUrl,
           reviewUrl,
-          locationStr,
-          capturedAt,
+          locationStr: proofLocation,
+          capturedAt: proofCapturedAt,
           reviewedAt: baseReview.reviewedAt,
           chainUpdated: false,
           warning,
@@ -466,8 +596,8 @@ export default async function handler(req, res) {
         summary: review.summary,
         evidenceUrl,
         reviewUrl,
-        locationStr,
-        capturedAt,
+        locationStr: proofLocation,
+        capturedAt: proofCapturedAt,
         reviewedAt: baseReview.reviewedAt,
         txHash: tx.hash,
         chainUpdated: true,
@@ -483,8 +613,8 @@ export default async function handler(req, res) {
       summary: review.summary,
       evidenceUrl,
       reviewUrl,
-      locationStr,
-      capturedAt,
+      locationStr: proofLocation,
+      capturedAt: proofCapturedAt,
       reviewedAt: baseReview.reviewedAt,
       chainUpdated: false,
       warning,

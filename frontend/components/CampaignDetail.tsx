@@ -42,8 +42,13 @@ function isPublicProofUrl(value: string | undefined) {
   return !!value && /^https:\/\//i.test(value);
 }
 
+function reviewSummary(summary: string | undefined) {
+  const text = String(summary || "").trim();
+  return /No AI analysis was returned|AI review was inconclusive|oracle response could not be parsed/i.test(text) ? "" : text;
+}
+
 function hasAiAnalysis(review: OracleResult | undefined) {
-  return !!review?.summary || review?.decision === "APPROVE" || review?.decision === "REJECT";
+  return !!reviewSummary(review?.summary) && (review?.decision === "APPROVE" || review?.decision === "REJECT");
 }
 
 function mapLocation(value: string | undefined) {
@@ -304,8 +309,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   };
 
   const sendToOracle = async (milestoneId: number, evidenceUrl: string) => {
-    if (!address || !evidenceImage || !capturedAt || !locationStr) {
-      throw new Error("Live camera photo and location required");
+    if (!address || !evidenceUrl) {
+      throw new Error("Public proof URL required");
     }
 
     const response = await fetch("/api/analyze", {
@@ -315,9 +320,6 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         action: "review",
         campaignAddress: address,
         milestoneId,
-        imageB64: evidenceImage,
-        locationStr,
-        capturedAt,
         evidenceUrl,
       }),
     });
@@ -335,8 +337,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           summary: result.summary,
           reviewedAt: Number(result.reviewedAt || Math.floor(Date.now() / 1000)),
           evidenceUrl: result.evidenceUrl || evidenceUrl,
-          locationStr: result.locationStr || locationStr,
-          capturedAt: Number(result.capturedAt || capturedAt),
+          locationStr: result.locationStr,
+          capturedAt: Number(result.capturedAt || 0),
           reviewUrl: result.reviewUrl,
           warning: result.warning,
           chainUpdated: result.chainUpdated,
@@ -382,18 +384,16 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     }
   };
 
-  const handleRetryOracle = async (milestoneId: number) => {
+  const handleRetryOracle = async (milestoneId: number, evidenceUrl: string) => {
     if (!wallet.signer || !address) return toast.error("Connect wallet first");
     if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
-    if (!evidenceImage || !capturedAt || !locationStr || evidenceMilestoneId !== milestoneId) {
-      return toast.error("Capture a fresh live photo first");
+    if (!evidenceUrl) {
+      return toast.error("No public proof URL is stored on-chain for this milestone.");
     }
 
     try {
       setSubmittingMilestone(milestoneId);
-      toast.loading("Uploading public proof...", { id: "submit" });
-      const evidenceUrl = await uploadProof(milestoneId);
-      toast.loading("Sending to AI Oracle...", { id: "submit" });
+      toast.loading("Retrying AI Oracle on the on-chain proof...", { id: "submit" });
       await sendToOracle(milestoneId, evidenceUrl);
       refetch();
     } catch (err: unknown) {
@@ -524,12 +524,13 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
               }
             : undefined;
           const review = offchainReview || chainReview;
-          const canSubmitProof = isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 1 || milestone.status === 4);
+          const canSubmitProof = isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 4);
           const proofUrl = isPublicProofUrl(milestone.evidenceUrl)
             ? milestone.evidenceUrl
             : isPublicProofUrl(offchainReview?.evidenceUrl) ? offchainReview.evidenceUrl : "";
           const proofMissing = milestone.id > 0 && milestone.status > 0 && !proofUrl;
           const aiReady = hasAiAnalysis(review);
+          const summary = reviewSummary(review?.summary);
           const reviewColor = aiReady ? (review?.approved ? "var(--success)" : "var(--danger)") : "var(--warning)";
           const location = mapLocation(review?.locationStr);
           const capturedTime = formatTime(review?.capturedAt, "ms");
@@ -632,9 +633,9 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                       <button
                         className="neo-btn neo-btn-primary"
                         disabled={submittingMilestone === milestone.id}
-                        onClick={() => milestone.status === 1 ? handleRetryOracle(milestone.id) : handleSubmitMilestone(milestone.id)}
+                        onClick={() => handleSubmitMilestone(milestone.id)}
                       >
-                        {milestone.status === 1 ? "Retry AI Oracle" : "Submit Evidence"}
+                        Submit Evidence
                       </button>
                     )}
 
@@ -654,8 +655,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                       ? `AI analyzed this proof and recommends ${review?.approved ? "approval" : "rejection"}.`
                       : "Proof is submitted on-chain. AI Oracle review is pending."}
                   </p>
-                  {review?.summary && (
-                    <p className="text-xs text-secondary whitespace-pre-line">{review.summary}</p>
+                  {summary && (
+                    <p className="text-xs text-secondary whitespace-pre-line">{summary}</p>
                   )}
                   {review?.warning && (
                     <p className="text-xs text-secondary mt-2">{review.warning}</p>
@@ -671,9 +672,21 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                     </p>
                   )}
                   {isNgo && (
-                    <p className="text-xs text-secondary mt-2">
-                      If this stays here after an oracle error, capture a fresh live photo above and retry the AI Oracle.
-                    </p>
+                    <div className="mt-4">
+                      {proofUrl ? (
+                        <button
+                          className="neo-btn neo-btn-primary"
+                          disabled={submittingMilestone === milestone.id}
+                          onClick={() => handleRetryOracle(milestone.id, proofUrl)}
+                        >
+                          Retry AI Oracle
+                        </button>
+                      ) : (
+                        <p className="text-xs text-secondary">
+                          This older submission has no public proof URL, so the oracle cannot safely retry it.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -683,8 +696,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                   <p className="mb-2 text-sm font-bold" style={{ color: reviewColor }}>
                     {aiReady ? `AI recommends ${review?.approved ? "approval" : "rejection"}.` : "AI review recorded."} 24-hour donor review active.
                   </p>
-                  {review?.summary ? (
-                    <p className="text-xs mb-3 text-secondary whitespace-pre-line">{review.summary}</p>
+                  {summary ? (
+                    <p className="text-xs mb-3 text-secondary whitespace-pre-line">{summary}</p>
                   ) : (
                     <p className="text-xs mb-3 text-secondary">
                       The vote window is open. AI analysis is loading from review storage.
@@ -736,8 +749,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                   <p className="mb-2 text-sm font-bold" style={{ color: 'var(--danger)' }}>
                     Final outcome: rejected.
                   </p>
-                  {review?.summary ? (
-                    <p className="text-xs text-secondary whitespace-pre-line">{review.summary}</p>
+                  {summary ? (
+                    <p className="text-xs text-secondary whitespace-pre-line">{summary}</p>
                   ) : (
                     <p className="text-xs text-secondary">
                       This older campaign was rejected by a legacy oracle contract that did not save the AI explanation or wait through the new 24-hour rejection review. The NGO can submit fresh live evidence before the deadline.
