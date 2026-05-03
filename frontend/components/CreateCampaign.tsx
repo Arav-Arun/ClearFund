@@ -69,6 +69,10 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
       toast.error("Switch to Sepolia first");
       return;
     }
+    if (!FACTORY_ADDRESS) {
+      toast.error("Factory address is not configured.");
+      return;
+    }
 
     try {
       setIsSubmitting(true);

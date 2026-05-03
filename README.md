@@ -190,27 +190,17 @@ Important security note: browser camera and geolocation reduce lazy fraud, but
 they are not perfect proof of reality. That is why ClearFund keeps the donor
 review window as a human layer after every AI recommendation.
 
-## Deployed Sepolia Factories
+## Deployment Addresses
 
-The frontend reads from the current factory and the Urban Oasis factory. The
-older demo factory is intentionally blocked because its campaigns use
-incompatible oracle contracts.
-
-```txt
-Current factory:
-0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2
-
-Urban Oasis fallback:
-0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
-```
-
-If you redeploy the contracts, update:
+Deployment addresses are not hardcoded in the public source. Put the active
+factory and any read-only legacy factories in the ignored root `.env` file for
+local work, and in Vercel environment variables for production.
 
 ```txt
-VITE_FACTORY_ADDRESS
-VITE_FACTORY_ADDRESSES
-FACTORY_ADDRESS
-FACTORY_ADDRESSES
+VITE_FACTORY_ADDRESS=current_factory_address
+VITE_FACTORY_ADDRESSES=optional_read_only_legacy_factory_addresses
+VITE_BLOCKED_FACTORY_ADDRESSES=optional_incompatible_factory_addresses
+VITE_SUPERSEDED_FACTORY_ADDRESSES=optional_old_factories_not_for_new_campaigns
 ```
 
 Existing deployed contracts cannot be changed by pushing new source code. Any
@@ -243,9 +233,12 @@ Client-side variables:
 
 ```txt
 VITE_WALLETCONNECT_PROJECT_ID=your_reown_or_walletconnect_project_id
-VITE_FACTORY_ADDRESS=0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2
-VITE_FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
-VITE_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+VITE_FACTORY_ADDRESS=current_factory_address
+VITE_FACTORY_ADDRESSES=optional_read_only_legacy_factory_addresses
+VITE_BLOCKED_FACTORY_ADDRESSES=optional_incompatible_factory_addresses
+VITE_SUPERSEDED_FACTORY_ADDRESSES=optional_old_factories_not_for_new_campaigns
+VITE_SEPOLIA_RPC_URL=public_sepolia_rpc_url
+VITE_BLOCK_EXPLORER_URL=sepolia_block_explorer_url
 ```
 
 Server-side variables for `frontend/api/analyze.js`:
@@ -253,10 +246,11 @@ Server-side variables for `frontend/api/analyze.js`:
 ```txt
 OPENAI_API_KEY=your_openai_key
 PRIVATE_KEY=oracle_wallet_private_key
-SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-FACTORY_ADDRESS=0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2
-FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
+SEPOLIA_RPC_URL=server_sepolia_rpc_url
 ```
+
+The oracle API reuses the public `VITE_FACTORY_*` address variables so the same
+factory list does not need to be duplicated as server-only env.
 
 Never commit `.env`, private keys, API keys, deployment metadata, or generated
 build output.
@@ -288,9 +282,9 @@ With the root set to `frontend`, the oracle route deploys as:
 /api/analyze
 ```
 
-If Vercel already has `VITE_FACTORY_ADDRESS` or `FACTORY_ADDRESS` configured
-from an older deployment, update those values to the current factory address
-listed above, or remove them so the source-code defaults are used.
+If Vercel already has old factory variables, update `VITE_FACTORY_ADDRESS` and
+`VITE_FACTORY_ADDRESSES`. The source code intentionally has no deployment
+address fallback.
 
 ## Public Repo Hygiene
 

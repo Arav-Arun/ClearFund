@@ -1,30 +1,20 @@
 import { ethers } from "ethers";
 import OpenAI from "openai";
 
-const RPC_URL = process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
-const ACTIVE_FACTORY_ADDRESS = "0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2";
-const LEGACY_FACTORY_ADDRESSES = [
-  "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
-];
-const BLOCKED_FACTORY_ADDRESSES = new Set([
-  // Older demo factory uses incompatible campaign/oracle contracts.
-  "0x6a837595e2592d699d48eb2dacf47df9493035d2",
-]);
-const SUPERSEDED_FACTORY_ADDRESSES = new Set([
-  // These factories deployed campaigns before AI rejection had a 24-hour review.
-  "0x9f2f3aef7960ebf8f578d7174fb8f3135394b398",
-]);
-const configuredFactory = (process.env.FACTORY_ADDRESS || ACTIVE_FACTORY_ADDRESS).trim();
-const FACTORY_ADDRESS = ethers.isAddress(configuredFactory) && !SUPERSEDED_FACTORY_ADDRESSES.has(configuredFactory.toLowerCase())
-  ? configuredFactory
-  : ACTIVE_FACTORY_ADDRESS;
-const FACTORY_ADDRESSES = [
+const RPC_URL = envValue("SEPOLIA_RPC_URL") || envValue("VITE_SEPOLIA_RPC_URL");
+const BLOCKED_FACTORY_ADDRESSES = addressSet(
+  envValue("BLOCKED_FACTORY_ADDRESSES") || envValue("VITE_BLOCKED_FACTORY_ADDRESSES")
+);
+const SUPERSEDED_FACTORY_ADDRESSES = addressSet(
+  envValue("SUPERSEDED_FACTORY_ADDRESSES") || envValue("VITE_SUPERSEDED_FACTORY_ADDRESSES")
+);
+const FACTORY_ADDRESS = factoryForOracle(
+  envValue("FACTORY_ADDRESS") || envValue("VITE_FACTORY_ADDRESS")
+);
+const FACTORY_ADDRESSES = uniqueAddresses([
   FACTORY_ADDRESS,
-  ACTIVE_FACTORY_ADDRESS,
-  ...(process.env.FACTORY_ADDRESSES?.split(",") || LEGACY_FACTORY_ADDRESSES),
-].map((address) => address.trim()).filter((address) => {
-  return ethers.isAddress(address) && !BLOCKED_FACTORY_ADDRESSES.has(address.toLowerCase());
-});
+  ...splitAddresses(envValue("FACTORY_ADDRESSES") || envValue("VITE_FACTORY_ADDRESSES")),
+]);
 
 const FACTORY_ABI = ["function getAllCampaigns() view returns (address[])"];
 
@@ -41,6 +31,44 @@ const MILESTONE_STATUS = {
   APPROVED: 3,
   REJECTED: 4,
 };
+
+function envValue(key) {
+  return String(process.env[key] || "").trim();
+}
+
+function splitAddresses(value) {
+  return value.split(",").map((address) => address.trim()).filter(Boolean);
+}
+
+function addressSet(value) {
+  return new Set(splitAddresses(value).map((address) => address.toLowerCase()));
+}
+
+function factoryForOracle(address) {
+  if (!ethers.isAddress(address)) return "";
+
+  const key = address.toLowerCase();
+  if (BLOCKED_FACTORY_ADDRESSES.has(key) || SUPERSEDED_FACTORY_ADDRESSES.has(key)) {
+    return "";
+  }
+
+  return address;
+}
+
+function uniqueAddresses(addresses) {
+  const seen = new Set();
+
+  return addresses.map((address) => address.trim()).filter((address) => {
+    if (!ethers.isAddress(address)) return false;
+
+    const key = address.toLowerCase();
+    if (BLOCKED_FACTORY_ADDRESSES.has(key)) return false;
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    return true;
+  });
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -129,6 +157,14 @@ export default async function handler(req, res) {
 
     if (!apiKey || !privateKey) {
       return res.status(500).json({ error: "Oracle is not configured." });
+    }
+
+    if (!RPC_URL) {
+      return res.status(500).json({ error: "Sepolia RPC URL is not configured." });
+    }
+
+    if (FACTORY_ADDRESSES.length === 0) {
+      return res.status(500).json({ error: "Factory addresses are not configured." });
     }
 
     if (!ethers.isAddress(campaignAddress)) {

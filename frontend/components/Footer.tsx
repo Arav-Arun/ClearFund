@@ -6,6 +6,10 @@ function shortAddress(address: string) {
 }
 
 export default function Footer() {
+  const contractUrl = BLOCK_EXPLORER_URL && FACTORY_ADDRESS
+    ? `${BLOCK_EXPLORER_URL}/address/${FACTORY_ADDRESS}`
+    : "";
+
   return (
     <footer className="footer">
       <div className="footer-content">
@@ -35,27 +39,33 @@ export default function Footer() {
           >
             Github Repo
           </a>
-          <a 
-            href={`${BLOCK_EXPLORER_URL}/address/${FACTORY_ADDRESS}`} 
-            target="_blank" 
-            rel="noreferrer"
-            className="font-bold text-sm uppercase tracking-wider hover:underline"
-          >
-            Contracts
-          </a>
+          {contractUrl && (
+            <a
+              href={contractUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="font-bold text-sm uppercase tracking-wider hover:underline"
+            >
+              Contracts
+            </a>
+          )}
         </div>
       </div>
 
       <div className="footer-contract">
         Active Sepolia factory:{" "}
-        <a
-          href={`${BLOCK_EXPLORER_URL}/address/${FACTORY_ADDRESS}`}
-          target="_blank"
-          rel="noreferrer"
-          className="font-mono text-accent font-bold"
-        >
-          {shortAddress(FACTORY_ADDRESS)}
-        </a>
+        {contractUrl ? (
+          <a
+            href={contractUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="font-mono text-accent font-bold"
+          >
+            {shortAddress(FACTORY_ADDRESS)}
+          </a>
+        ) : (
+          <span className="font-mono text-muted">not configured</span>
+        )}
       </div>
       
       <div className="text-center mt-8 pt-4 border-t border-[#3c4043] text-xs text-muted">

@@ -6,36 +6,35 @@ import { useAccount, useDisconnect, useSwitchChain, useWalletClient } from "wagm
 import { sepolia } from "wagmi/chains";
 
 const env = import.meta.env;
-const ACTIVE_FACTORY_ADDRESS = "0x95c4a2209979aC9Ec961e44C0d95aF09f65416f2";
 
-const LEGACY_FACTORY_ADDRESSES = [
-  "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
-];
+function envValue(key: string) {
+  return String(env[key] || "").trim();
+}
 
-const BLOCKED_FACTORY_ADDRESSES = new Set([
-  // Older demo factory uses incompatible campaign/oracle contracts.
-  "0x6a837595e2592d699d48eb2dacf47df9493035d2",
-]);
+function splitAddresses(value: string) {
+  return value.split(",").map((address) => address.trim()).filter(Boolean);
+}
 
-const SUPERSEDED_FACTORY_ADDRESSES = new Set([
-  // These factories deployed campaigns before AI rejection had a 24-hour review.
-  "0x9f2f3aef7960ebf8f578d7174fb8f3135394b398",
-  "0x412a33fbcaa3ac0f6e5a0255f9779aab8e8e1470",
-]);
+function addressSet(value: string) {
+  return new Set(splitAddresses(value).map((address) => address.toLowerCase()));
+}
+
+const BLOCKED_FACTORY_ADDRESSES = addressSet(envValue("VITE_BLOCKED_FACTORY_ADDRESSES"));
+const SUPERSEDED_FACTORY_ADDRESSES = addressSet(envValue("VITE_SUPERSEDED_FACTORY_ADDRESSES"));
 
 function factoryForCreation(address: string) {
   const trimmed = address.trim();
   const key = trimmed.toLowerCase();
 
-  if (!ethers.isAddress(trimmed)) return ACTIVE_FACTORY_ADDRESS;
+  if (!ethers.isAddress(trimmed)) return "";
   if (BLOCKED_FACTORY_ADDRESSES.has(key) || SUPERSEDED_FACTORY_ADDRESSES.has(key)) {
-    return ACTIVE_FACTORY_ADDRESS;
+    return "";
   }
 
   return trimmed;
 }
 
-export const FACTORY_ADDRESS = factoryForCreation(env.VITE_FACTORY_ADDRESS || ACTIVE_FACTORY_ADDRESS);
+export const FACTORY_ADDRESS = factoryForCreation(envValue("VITE_FACTORY_ADDRESS"));
 
 function uniqueAddresses(addresses: string[]) {
   const seen = new Set<string>();
@@ -54,22 +53,14 @@ function uniqueAddresses(addresses: string[]) {
 
 export const FACTORY_ADDRESSES = uniqueAddresses([
   FACTORY_ADDRESS,
-  ACTIVE_FACTORY_ADDRESS,
-  ...(env.VITE_FACTORY_ADDRESSES?.split(",") || LEGACY_FACTORY_ADDRESSES),
+  ...splitAddresses(envValue("VITE_FACTORY_ADDRESSES")),
 ]);
 
-export const BLOCK_EXPLORER_URL =
-  env.VITE_BLOCK_EXPLORER_URL ||
-  "https://sepolia.etherscan.io";
+export const BLOCK_EXPLORER_URL = envValue("VITE_BLOCK_EXPLORER_URL");
 
-export const READONLY_SEPOLIA_RPC =
-  env.VITE_SEPOLIA_RPC_URL ||
-  "https://ethereum-sepolia-rpc.publicnode.com";
+export const READONLY_SEPOLIA_RPC = envValue("VITE_SEPOLIA_RPC_URL");
 
-export const WALLETCONNECT_PROJECT_ID = (
-  env.VITE_WALLETCONNECT_PROJECT_ID ||
-  "clearfund-development"
-).trim();
+export const WALLETCONNECT_PROJECT_ID = envValue("VITE_WALLETCONNECT_PROJECT_ID");
 
 export const SEPOLIA_CHAIN_ID = 11155111;
 
@@ -253,7 +244,7 @@ export const wagmiConfig = getDefaultConfig({
   appName: "ClearFund",
   projectId: WALLETCONNECT_PROJECT_ID,
   chains: [sepolia],
-  transports: { [sepolia.id]: http(READONLY_SEPOLIA_RPC) },
+  transports: { [sepolia.id]: READONLY_SEPOLIA_RPC ? http(READONLY_SEPOLIA_RPC) : http() },
 });
 
 export function formatEth(value: bigint, maxDecimals = 4): string {
@@ -276,6 +267,7 @@ export function useWallet(): WalletState {
   const [error, setError] = useState<string | null>(null);
 
   const readonlyProvider = useMemo(() => {
+    if (!READONLY_SEPOLIA_RPC) return null;
     return new ethers.JsonRpcProvider(READONLY_SEPOLIA_RPC);
   }, []);
 
