@@ -121,7 +121,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         
         // 3. Trigger Oracle Backend
         try {
-          const response = await fetch("http://localhost:3001/analyze", {
+          const response = await fetch("/api/analyze", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

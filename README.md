@@ -165,52 +165,18 @@ The AI prompt is straightforward:
 
 ---
 
-## Local Setup
+## Vercel Deployment
 
-### Prerequisites
+ClearFund is designed to be deployed as a single project on Vercel.
 
-- [Node.js](https://nodejs.org) v18+
-- [MetaMask](https://metamask.io) browser extension
-- OpenAI API key with GPT-4o access
-- A funded Sepolia wallet (for the Oracle to sign transactions)
+1.  Push this entire repository to GitHub.
+2.  Import the project into Vercel.
+3.  Add the following **Environment Variables** in the Vercel dashboard:
+    *   `OPENAI_API_KEY`: Your OpenAI secret key.
+    *   `PRIVATE_KEY`: Your Oracle wallet private key.
+    *   `SEPOLIA_RPC_URL`: (Optional) Custom Sepolia RPC.
+4.  Vercel will automatically build the frontend and host the AI Oracle as a Serverless Function at `/api/analyze`.
 
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/Arav-Arun/ClearFund.git
-cd ClearFund
-```
-
-### 2. Configure environment variables
-
-Create a `.env` file in the root:
-
-```
-OPENAI_API_KEY=sk-...
-PRIVATE_KEY=0x...       # Oracle wallet private key
-SEPOLIA_RPC_URL=        # Optional: defaults to publicnode
-```
-
-### 3. Start the frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The app will be available at `http://localhost:5173`.
-
-### 4. Start the AI Oracle backend
-
-In a separate terminal:
-
-```bash
-cd oracle
-node server.js
-```
-
-The oracle listens on `http://localhost:3001`.
 
 ---
 
