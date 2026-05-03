@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import "./ImpactFundCampaign.sol";
+import "./ClearFundCampaign.sol";
 
-/// @title ImpactFundFactory — Campaign deployer and registry
-/// @notice Deploys new ImpactFundCampaign contracts with bootstrap grant config
+/// @title ClearFundFactory — Campaign deployer and registry
+/// @author Arav Arun
+/// @notice Deploys new ClearFundCampaign contracts with bootstrap grant config
 ///         and maintains a global registry of all campaigns.
-contract ImpactFundFactory {
+contract ClearFundFactory {
     struct MilestoneInput {
         string title;
         string description;
@@ -14,12 +15,16 @@ contract ImpactFundFactory {
         uint256 deadline;
     }
 
+    address public oracleAddress;
     address[] public campaigns;
     mapping(address => address[]) public campaignsByNGO;
 
     event CampaignCreated(address indexed campaignAddress, address indexed ngo, string title);
 
-    constructor() {}
+    constructor(address _oracleAddress) {
+        require(_oracleAddress != address(0), "Factory: oracle required");
+        oracleAddress = _oracleAddress;
+    }
 
     function createCampaign(
         string memory _title,
@@ -51,8 +56,9 @@ contract ImpactFundFactory {
             previousDeadline = _milestones[i].deadline;
         }
 
-        ImpactFundCampaign campaign = new ImpactFundCampaign(
+        ClearFundCampaign campaign = new ClearFundCampaign(
             msg.sender,
+            oracleAddress,
             _title,
             _description,
             _ngoName,

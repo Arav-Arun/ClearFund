@@ -4,7 +4,7 @@ const env = import.meta.env;
 
 export const FACTORY_ADDRESS = (
   env.VITE_FACTORY_ADDRESS ||
-  "0x6A837595E2592d699d48eB2DAcF47Df9493035d2"
+  "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470"
 ).trim();
 
 export const BLOCK_EXPLORER_URL =
@@ -29,6 +29,7 @@ export const CAMPAIGN_STATUS = [
 export const MILESTONE_STATUS = [
   "Pending",
   "Submitted",
+  "In Veto",
   "Approved",
   "Rejected",
 ] as const;
@@ -63,8 +64,11 @@ export const FACTORY_ABI = [
 export const CAMPAIGN_ABI = [
   // Write
   "function donate() payable",
+  "function startCampaign() external",
   "function submitMilestone(uint256, string) external",
-  "function vote(uint256, bool) external",
+  "function vetoMilestone(uint256) external",
+  "function executeMilestone(uint256) external",
+  "function cancelStalledCampaign() external",
   "function refund() external",
 
   // Read — campaign info
@@ -92,9 +96,7 @@ export const CAMPAIGN_ABI = [
       uint256 deadline,
       uint8 status,
       string evidenceUrl,
-      uint256 votesFor,
-      uint256 votesAgainst,
-      uint256 submissionCount
+      uint256 vetoEndsAt
     )[]
   )`,
 
@@ -104,8 +106,10 @@ export const CAMPAIGN_ABI = [
 
   // Events
   "event DonationReceived(address indexed, uint256)",
+  "event CampaignStarted()",
   "event MilestoneSubmitted(uint256 indexed, string)",
-  "event VoteCast(address indexed, uint256 indexed, bool)",
+  "event OracleDecision(uint256 indexed, bool)",
+  "event VetoCast(address indexed, uint256 indexed)",
   "event FundsReleased(uint256 indexed, uint256)",
-  "event MilestoneRejected(uint256 indexed)",
+  "event CampaignCancelled()",
 ] as const;

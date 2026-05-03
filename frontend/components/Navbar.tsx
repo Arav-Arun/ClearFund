@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
-import type { WalletState } from "./types";
+import type { WalletState } from "../utils/types";
 
 interface NavbarProps {
   wallet: WalletState;

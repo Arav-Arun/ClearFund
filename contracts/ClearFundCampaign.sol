@@ -3,11 +3,12 @@ pragma solidity ^0.8.27;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title ImpactFundCampaign — Simplified Milestone-gated donation escrow
-/// @notice Escrows ETH. Milestones release when >50% of the donated weight approves.
-contract ImpactFundCampaign is ReentrancyGuard {
+/// @title ClearFundCampaign — AI Oracle Verification with Veto
+/// @author Arav Arun
+/// @notice Escrows ETH. Milestones are verified by an AI Oracle, followed by a 24-hour donor veto window.
+contract ClearFundCampaign is ReentrancyGuard {
     enum CampaignStatus { Fundraising, Active, Completed, Cancelled }
-    enum MilestoneStatus { Pending, Submitted, Approved, Rejected }
+    enum MilestoneStatus { Pending, Submitted, InVeto, Approved, Rejected }
 
     struct Milestone {
         string title;
@@ -16,9 +17,7 @@ contract ImpactFundCampaign is ReentrancyGuard {
         uint256 deadline;
         MilestoneStatus status;
         string evidenceUrl;
-        uint256 votesFor;
-        uint256 votesAgainst;
-        uint256 submissionCount;
+        uint256 vetoEndsAt;
     }
 
     struct CampaignView {
@@ -35,6 +34,7 @@ contract ImpactFundCampaign is ReentrancyGuard {
     }
 
     address public ngoAddress;
+    address public oracleAddress;
     string public title;
     string public description;
     string public ngoName;
@@ -46,7 +46,6 @@ contract ImpactFundCampaign is ReentrancyGuard {
 
     Milestone[] public milestones;
     mapping(address => uint256) public donations;
-    mapping(address => mapping(uint256 => uint256)) public lastVotedSubmission;
 
     address[] public donorList;
     mapping(address => bool) private isDonor;
@@ -59,14 +58,21 @@ contract ImpactFundCampaign is ReentrancyGuard {
 
     event DonationReceived(address indexed donor, uint256 amount);
     event BootstrapReleased(uint256 amount);
+    event CampaignStarted();
     event MilestoneSubmitted(uint256 indexed milestoneId, string evidenceUrl);
-    event VoteCast(address indexed voter, uint256 indexed milestoneId, bool approved);
+    event OracleDecision(uint256 indexed milestoneId, bool approved);
+    event VetoCast(address indexed voter, uint256 indexed milestoneId);
     event FundsReleased(uint256 indexed milestoneId, uint256 amount);
-    event MilestoneRejected(uint256 indexed milestoneId);
+    event CampaignCancelled();
     event RefundIssued(address indexed donor, uint256 amount);
 
     modifier onlyNGO() {
         require(msg.sender == ngoAddress, "Campaign: caller is not the NGO");
+        _;
+    }
+
+    modifier onlyOracle() {
+        require(msg.sender == oracleAddress, "Campaign: caller is not the Oracle");
         _;
     }
 
@@ -82,6 +88,7 @@ contract ImpactFundCampaign is ReentrancyGuard {
 
     constructor(
         address _ngoAddress,
+        address _oracleAddress,
         string memory _title,
         string memory _description,
         string memory _ngoName,
@@ -90,7 +97,9 @@ contract ImpactFundCampaign is ReentrancyGuard {
         uint256 _bootstrapPercent
     ) {
         require(_goalAmount > 0, "Campaign: goal must be > 0");
+        require(_oracleAddress != address(0), "Campaign: oracle required");
         ngoAddress = _ngoAddress;
+        oracleAddress = _oracleAddress;
         title = _title;
         description = _description;
         ngoName = _ngoName;
@@ -100,17 +109,15 @@ contract ImpactFundCampaign is ReentrancyGuard {
         status = CampaignStatus.Fundraising;
         deployer = msg.sender;
 
-        // Milestone 0 is the Bootstrap Grant, released automatically
+        // Milestone 0 is the Bootstrap Grant
         milestones.push(Milestone({
             title: "Initial Operating Grant",
-            description: "Bootstrap funds released automatically once its tranche is funded.",
+            description: "Bootstrap funds released when campaign starts.",
             fundPercent: _bootstrapPercent,
             deadline: 0,
             status: MilestoneStatus.Pending,
             evidenceUrl: "",
-            votesFor: 0,
-            votesAgainst: 0,
-            submissionCount: 0
+            vetoEndsAt: 0
         }));
     }
 
@@ -130,18 +137,15 @@ contract ImpactFundCampaign is ReentrancyGuard {
             deadline: _milestoneDeadline,
             status: MilestoneStatus.Pending,
             evidenceUrl: "",
-            votesFor: 0,
-            votesAgainst: 0,
-            submissionCount: 0
+            vetoEndsAt: 0
         }));
     }
 
-    function donate() external payable nonReentrant {
-        require(status == CampaignStatus.Fundraising || status == CampaignStatus.Active, "Campaign: closed");
+    function donate() external payable nonReentrant inStatus(CampaignStatus.Fundraising) {
         require(msg.value > 0, "Campaign: donation > 0");
         require(msg.sender != ngoAddress, "Campaign: NGO cannot donate");
         require(block.timestamp < campaignDeadline, "Campaign: deadline passed");
-        require(raisedAmount + msg.value <= goalAmount, "Campaign: exceeds goal");
+        // Soft Cap: We DO NOT restrict raisedAmount <= goalAmount, allowing overfunding.
 
         if (!isDonor[msg.sender]) {
             donorList.push(msg.sender);
@@ -151,18 +155,23 @@ contract ImpactFundCampaign is ReentrancyGuard {
         raisedAmount += msg.value;
 
         emit DonationReceived(msg.sender, msg.value);
+    }
 
-        if (!bootstrapReleased && raisedAmount >= (goalAmount * milestones[0].fundPercent) / 100) {
-            _releaseBootstrap();
-        }
+    function startCampaign() external onlyNGO inStatus(CampaignStatus.Fundraising) {
+        require(raisedAmount >= (goalAmount * milestones[0].fundPercent) / 100, "Campaign: bootstrap not reached");
+        
+        status = CampaignStatus.Active;
+        emit CampaignStarted();
+        
+        _releaseBootstrap();
     }
 
     function _releaseBootstrap() internal {
-        uint256 bootstrapAmount = (goalAmount * bootstrapPercent) / 100;
+        // Calculate based on actual raised amount (handles overfunding)
+        uint256 bootstrapAmount = (raisedAmount * bootstrapPercent) / 100;
         bootstrapReleased = true;
         milestones[0].status = MilestoneStatus.Approved;
         fundsReleased[0] = true;
-        status = CampaignStatus.Active;
 
         (bool success, ) = payable(ngoAddress).call{value: bootstrapAmount}("");
         require(success, "Campaign: transfer failed");
@@ -176,54 +185,59 @@ contract ImpactFundCampaign is ReentrancyGuard {
         require(bootstrapReleased, "Campaign: bootstrap not released");
         require(_previousMilestoneApproved(milestoneId), "Campaign: previous not approved");
 
-        uint256 cumulativePercent = 0;
-        for (uint256 i = 0; i <= milestoneId; i++) {
-            cumulativePercent += milestones[i].fundPercent;
-        }
-        require(raisedAmount >= (goalAmount * cumulativePercent) / 100, "Campaign: funding not unlocked");
-
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.Pending || m.status == MilestoneStatus.Rejected, "Campaign: not submittable");
         
         m.evidenceUrl = evidenceUrl;
         m.status = MilestoneStatus.Submitted;
-        m.submissionCount += 1;
-        m.votesFor = 0;
-        m.votesAgainst = 0;
 
         emit MilestoneSubmitted(milestoneId, evidenceUrl);
     }
 
-    function vote(uint256 milestoneId, bool approve) external onlyDonor nonReentrant inStatus(CampaignStatus.Active) {
-        require(milestoneId > 0 && milestoneId < milestones.length, "Campaign: invalid id");
+    // ORACLE FUNCTIONS
+    function oracleApproveMilestone(uint256 milestoneId) external onlyOracle inStatus(CampaignStatus.Active) {
         Milestone storage m = milestones[milestoneId];
-        require(m.status == MilestoneStatus.Submitted, "Campaign: not in voting");
-        require(lastVotedSubmission[msg.sender][milestoneId] < m.submissionCount, "Campaign: already voted");
+        require(m.status == MilestoneStatus.Submitted, "Campaign: not submitted");
 
-        lastVotedSubmission[msg.sender][milestoneId] = m.submissionCount;
-        uint256 weight = donations[msg.sender];
+        m.status = MilestoneStatus.InVeto;
+        m.vetoEndsAt = block.timestamp + 24 hours;
 
-        if (approve) {
-            m.votesFor += weight;
-        } else {
-            m.votesAgainst += weight;
-        }
+        emit OracleDecision(milestoneId, true);
+    }
 
-        emit VoteCast(msg.sender, milestoneId, approve);
+    function oracleRejectMilestone(uint256 milestoneId) external onlyOracle inStatus(CampaignStatus.Active) {
+        Milestone storage m = milestones[milestoneId];
+        require(m.status == MilestoneStatus.Submitted, "Campaign: not submitted");
 
-        // Auto-resolve if simple majority is reached
-        uint256 threshold = raisedAmount / 2;
-        if (m.votesFor > threshold) {
-            _releaseMilestoneFunds(milestoneId);
-        } else if (m.votesAgainst > threshold) {
-            m.status = MilestoneStatus.Rejected;
-            emit MilestoneRejected(milestoneId);
-        }
+        m.status = MilestoneStatus.Rejected;
+        emit OracleDecision(milestoneId, false);
+    }
+
+    // DONOR VETO
+    function vetoMilestone(uint256 milestoneId) external onlyDonor nonReentrant inStatus(CampaignStatus.Active) {
+        Milestone storage m = milestones[milestoneId];
+        require(m.status == MilestoneStatus.InVeto, "Campaign: not in veto phase");
+        require(block.timestamp <= m.vetoEndsAt, "Campaign: veto period ended");
+
+        // A single donor veto halts the automated release, forcing the NGO to resubmit or dispute off-chain.
+        m.status = MilestoneStatus.Rejected;
+        emit VetoCast(msg.sender, milestoneId);
+    }
+
+    // EXECUTE
+    function executeMilestone(uint256 milestoneId) external nonReentrant inStatus(CampaignStatus.Active) {
+        Milestone storage m = milestones[milestoneId];
+        require(m.status == MilestoneStatus.InVeto, "Campaign: not in veto phase");
+        require(block.timestamp > m.vetoEndsAt, "Campaign: veto period active");
+
+        _releaseMilestoneFunds(milestoneId);
     }
 
     function _releaseMilestoneFunds(uint256 milestoneId) internal {
         Milestone storage m = milestones[milestoneId];
-        uint256 trancheAmount = milestoneId == milestones.length - 1 ? address(this).balance : (goalAmount * m.fundPercent) / 100;
+        
+        // Payouts scale based on actual raised amount
+        uint256 trancheAmount = milestoneId == milestones.length - 1 ? address(this).balance : (raisedAmount * m.fundPercent) / 100;
         uint256 available = address(this).balance;
         if (trancheAmount > available) trancheAmount = available;
 
@@ -238,8 +252,27 @@ contract ImpactFundCampaign is ReentrancyGuard {
         if (_allMilestonesApproved()) status = CampaignStatus.Completed;
     }
 
+    // GHOSTING DEADLOCK FIX
+    function cancelStalledCampaign() external {
+        require(status == CampaignStatus.Active, "Campaign: not active");
+        uint256 activeMilestone = 0;
+        
+        for (uint256 i = 1; i < milestones.length; i++) {
+            if (milestones[i].status != MilestoneStatus.Approved) {
+                activeMilestone = i;
+                break;
+            }
+        }
+        
+        require(activeMilestone > 0, "Campaign: all milestones approved");
+        require(block.timestamp > milestones[activeMilestone].deadline, "Campaign: deadline not passed");
+        
+        status = CampaignStatus.Cancelled;
+        emit CampaignCancelled();
+    }
+
     function refund() external onlyDonor nonReentrant {
-        bool fundraisingFailed = block.timestamp > campaignDeadline && raisedAmount < goalAmount && status != CampaignStatus.Completed;
+        bool fundraisingFailed = block.timestamp > campaignDeadline && raisedAmount < (goalAmount * bootstrapPercent) / 100 && status == CampaignStatus.Fundraising;
         require(status == CampaignStatus.Cancelled || fundraisingFailed, "Campaign: refund not available");
         require(!refunded[msg.sender], "Campaign: refunded");
 

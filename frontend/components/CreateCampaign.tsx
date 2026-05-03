@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ethers } from "ethers";
-import { FACTORY_ADDRESS, FACTORY_ABI } from "./constants";
-import type { WalletState } from "./types";
+import { FACTORY_ADDRESS, FACTORY_ABI } from "../utils/constants";
+import type { WalletState } from "../utils/types";
 import { toast } from "react-hot-toast";
 
 export default function CreateCampaign({ wallet }: { wallet: WalletState }) {

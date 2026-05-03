@@ -24,9 +24,7 @@ export interface MilestoneInfo {
   deadline: number;
   status: number;
   evidenceUrl: string;
-  votesFor: bigint;
-  votesAgainst: bigint;
-  submissionCount: number;
+  vetoEndsAt: number;
 }
 
 import type { ethers } from "ethers";

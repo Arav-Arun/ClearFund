@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { FACTORY_ADDRESS, FACTORY_ABI, CAMPAIGN_ABI } from "./constants";
-import type { CampaignInfo, MilestoneInfo } from "./types";
+import { FACTORY_ADDRESS, FACTORY_ABI, CAMPAIGN_ABI } from "../utils/constants";
+import type { CampaignInfo, MilestoneInfo } from "../utils/types";
 
 export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
   const [campaigns, setCampaigns] = useState<CampaignInfo[]>([]);
@@ -91,9 +91,7 @@ export function useCampaign(provider: ethers.AbstractProvider | null, address: s
           deadline: Number(m.deadline),
           status: Number(m.status),
           evidenceUrl: m.evidenceUrl,
-          votesFor: m.votesFor,
-          votesAgainst: m.votesAgainst,
-          submissionCount: Number(m.submissionCount),
+          vetoEndsAt: Number(m.vetoEndsAt),
         }))
       );
     } catch (err) {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { READONLY_SEPOLIA_RPC, SEPOLIA_CHAIN_ID } from "./constants";
-import type { WalletState } from "./types";
+import { READONLY_SEPOLIA_RPC, SEPOLIA_CHAIN_ID } from "../utils/constants";
+import type { WalletState } from "../utils/types";
 
 declare global {
   interface Window {

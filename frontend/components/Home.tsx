@@ -1,8 +1,8 @@
 import { Link } from "react-router-dom";
-import { useAllCampaigns } from "./useCampaign";
-import { formatEth } from "./format";
-import { CAMPAIGN_STATUS } from "./constants";
-import type { WalletState } from "./types";
+import { useAllCampaigns } from "../hooks/useCampaign";
+import { formatEth } from "../utils/format";
+import { CAMPAIGN_STATUS } from "../utils/constants";
+import type { WalletState } from "../utils/types";
 
 export default function Home({ wallet }: { wallet: WalletState }) {
   const { campaigns, loading } = useAllCampaigns(wallet.provider);
@@ -66,8 +66,8 @@ export default function Home({ wallet }: { wallet: WalletState }) {
             <span className="how-number">2</span>
             <h3 className="font-bold text-xl mb-3">2. Verify</h3>
             <p className="text-secondary">
-              The NGO uploads progress evidence. VeraFund checks the proof 
-              with community voting and on-chain verification.
+              The NGO uploads progress evidence. ClearFund checks the proof 
+              with an AI Oracle and a public veto window.
             </p>
           </div>
           <div className="how-card">
