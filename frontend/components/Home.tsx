@@ -1,13 +1,11 @@
 import { Link } from "react-router-dom";
-import { useAllCampaigns } from "../hooks/useCampaign";
-import { formatEth } from "../utils/format";
-import { CAMPAIGN_STATUS } from "../utils/constants";
-import type { WalletState } from "../utils/types";
+import { useAllCampaigns } from "../campaigns";
+import { formatEth } from "../format";
+import { CAMPAIGN_STATUS } from "../chain";
+import type { WalletState } from "../types";
 
 export default function Home({ wallet }: { wallet: WalletState }) {
-  const { campaigns, loading } = useAllCampaigns(wallet.provider);
-
-  const filteredCampaigns = campaigns; // No search bar anymore
+  const { campaigns, loading, error } = useAllCampaigns(wallet.provider);
 
   // Stats calculation
   const totalRaised = campaigns.reduce((acc, c) => acc + c.raisedAmount, 0n);
@@ -112,7 +110,12 @@ export default function Home({ wallet }: { wallet: WalletState }) {
             <div className="stat-value" style={{ border: 'none', fontSize: "32px" }}>Loading Campaigns...</div>
             <p className="mt-4 text-secondary">Fetching data directly from the Ethereum Sepolia network</p>
           </div>
-        ) : filteredCampaigns.length === 0 ? (
+        ) : error ? (
+          <div className="empty-state">
+            <p className="font-bold text-2xl text-secondary">{error}</p>
+            <p className="mt-2">The default public Sepolia RPC is set in frontend/chain.ts.</p>
+          </div>
+        ) : campaigns.length === 0 ? (
           <div className="empty-state">
             <p className="font-bold text-2xl text-secondary">No campaigns found</p>
             <p className="mt-2">Be the first to start a movement with accountability.</p>
@@ -120,7 +123,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
           </div>
         ) : (
           <div className="campaign-grid">
-            {filteredCampaigns.map((campaign) => {
+            {campaigns.map((campaign) => {
               const progress = campaign.goalAmount > 0n
                 ? Number(campaign.raisedAmount * 100n / campaign.goalAmount)
                 : 0;

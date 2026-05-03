@@ -1,15 +1,27 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { FACTORY_ADDRESS, FACTORY_ABI, CAMPAIGN_ABI } from "../utils/constants";
-import type { CampaignInfo, MilestoneInfo } from "../utils/types";
+import { FACTORY_ADDRESS, FACTORY_ABI, CAMPAIGN_ABI } from "./chain";
+import type { CampaignInfo, MilestoneInfo } from "./types";
+
+type MilestoneRow = {
+  title: string;
+  description: string;
+  fundPercent: bigint;
+  deadline: bigint;
+  status: bigint;
+  evidenceUrl: string;
+  vetoEndsAt: bigint;
+};
 
 export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
   const [campaigns, setCampaigns] = useState<CampaignInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchCampaigns = useCallback(async () => {
     if (!provider) return;
     setLoading(true);
+    setError(null);
     try {
       const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
       const addresses = await factory.getAllCampaigns();
@@ -36,6 +48,7 @@ export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
       setCampaigns(loaded);
     } catch (err) {
       console.error(err);
+      setError("Could not load campaigns. Check the Sepolia RPC URL.");
       setCampaigns([]);
     } finally {
       setLoading(false);
@@ -46,7 +59,7 @@ export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
     fetchCampaigns();
   }, [fetchCampaigns]);
 
-  return { campaigns, loading, refetch: fetchCampaigns };
+  return { campaigns, loading, error, refetch: fetchCampaigns };
 }
 
 export function useCampaign(provider: ethers.AbstractProvider | null, address: string | undefined) {
@@ -82,8 +95,7 @@ export function useCampaign(provider: ethers.AbstractProvider | null, address: s
 
       const allMilestones = await contract.getAllMilestones();
       setMilestones(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        allMilestones.map((m: any, i: number) => ({
+        allMilestones.map((m: MilestoneRow, i: number) => ({
           id: i,
           title: m.title,
           description: m.description,

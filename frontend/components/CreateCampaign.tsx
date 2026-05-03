@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ethers } from "ethers";
-import { FACTORY_ADDRESS, FACTORY_ABI } from "../utils/constants";
-import type { WalletState } from "../utils/types";
+import { FACTORY_ADDRESS, FACTORY_ABI } from "../chain";
+import type { WalletState } from "../types";
 import { toast } from "react-hot-toast";
 
 export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
@@ -37,19 +37,28 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
 
       const parsedGoal = ethers.parseEther(goalAmount);
       const parsedDeadline = Math.floor(new Date(campaignDeadline).getTime() / 1000);
-      const parsedBootstrap = Number(bootstrapPercent) * 100; // basis points
+      const parsedBootstrap = Number(bootstrapPercent);
 
       const formattedMilestones = milestones.map((m) => ({
         title: m.title,
         description: m.description,
-        fundPercent: Number(m.fundPercent) * 100, // basis points
+        fundPercent: Number(m.fundPercent),
         deadline: Math.floor(new Date(m.deadline).getTime() / 1000),
       }));
 
-      // Validation
+      if (milestones.length < 2 || milestones.length > 5) {
+        toast.error("Use 2 to 5 milestones.");
+        return;
+      }
+
+      if (parsedBootstrap < 1 || parsedBootstrap > 15) {
+        toast.error("Bootstrap must be between 1% and 15%.");
+        return;
+      }
+
       const totalMilestonePercent = formattedMilestones.reduce((acc, m) => acc + m.fundPercent, 0);
-      if (totalMilestonePercent + parsedBootstrap !== 10000) {
-        toast.error(`Total percentages must equal 100%. Currently: ${(totalMilestonePercent + parsedBootstrap) / 100}%`);
+      if (totalMilestonePercent !== 100) {
+        toast.error(`Milestone percentages must equal 100%. Currently: ${totalMilestonePercent}%`);
         return;
       }
 
@@ -157,8 +166,8 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
             className="neo-input"
             type="number"
             required
-            min="0"
-            max="100"
+            min="1"
+            max="15"
             placeholder="e.g. 10"
             value={bootstrapPercent}
             onChange={(e) => setBootstrapPercent(e.target.value)}

@@ -1,5 +1,3 @@
-// ── Environment config ──
-
 const env = import.meta.env;
 
 export const FACTORY_ADDRESS = (
@@ -13,11 +11,14 @@ export const BLOCK_EXPLORER_URL =
 
 export const READONLY_SEPOLIA_RPC =
   env.VITE_SEPOLIA_RPC_URL ||
-  "https://rpc.ankr.com/eth_sepolia";
+  "https://ethereum-sepolia-rpc.publicnode.com";
+
+export const WALLETCONNECT_PROJECT_ID = (
+  env.VITE_WALLETCONNECT_PROJECT_ID ||
+  "clearfund-development"
+).trim();
 
 export const SEPOLIA_CHAIN_ID = 11155111;
-
-// ── Status labels ──
 
 export const CAMPAIGN_STATUS = [
   "Accepting Donations",
@@ -34,10 +35,7 @@ export const MILESTONE_STATUS = [
   "Rejected",
 ] as const;
 
-// ── ABIs (human-readable format) ──
-
 export const FACTORY_ABI = [
-  // Write
   `function createCampaign(
     string _title,
     string _description,
@@ -53,16 +51,12 @@ export const FACTORY_ABI = [
     uint256 _campaignDeadline
   ) external returns (address)`,
 
-  // Read
   "function getAllCampaigns() view returns (address[])",
   "function getCampaignCount() view returns (uint256)",
-
-  // Events
   "event CampaignCreated(address indexed, address indexed, string)",
 ] as const;
 
 export const CAMPAIGN_ABI = [
-  // Write
   "function donate() payable",
   "function startCampaign() external",
   "function submitMilestone(uint256, string) external",
@@ -70,8 +64,6 @@ export const CAMPAIGN_ABI = [
   "function executeMilestone(uint256) external",
   "function cancelStalledCampaign() external",
   "function refund() external",
-
-  // Read — campaign info
   `function getCampaign() view returns (
     tuple(
       address ngoAddress,
@@ -86,8 +78,6 @@ export const CAMPAIGN_ABI = [
       uint256 milestoneCount
     )
   )`,
-
-  // Read — milestones
   `function getAllMilestones() view returns (
     tuple(
       string title,
@@ -99,12 +89,8 @@ export const CAMPAIGN_ABI = [
       uint256 vetoEndsAt
     )[]
   )`,
-
-  // Read — donations
   "function getDonation(address) view returns (uint256)",
   "function donations(address) view returns (uint256)",
-
-  // Events
   "event DonationReceived(address indexed, uint256)",
   "event CampaignStarted()",
   "event MilestoneSubmitted(uint256 indexed, string)",

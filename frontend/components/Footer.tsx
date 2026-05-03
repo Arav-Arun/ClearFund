@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { FACTORY_ADDRESS, BLOCK_EXPLORER_URL } from "../utils/constants";
+import { FACTORY_ADDRESS, BLOCK_EXPLORER_URL } from "../chain";
 
 export default function Footer() {
   return (

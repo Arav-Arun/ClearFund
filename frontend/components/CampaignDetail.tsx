@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { ethers } from "ethers";
-import { useCampaign } from "../hooks/useCampaign";
-import { CAMPAIGN_ABI, CAMPAIGN_STATUS, MILESTONE_STATUS } from "../utils/constants";
-import { formatEth } from "../utils/format";
-import type { WalletState } from "../utils/types";
+import { useCampaign } from "../campaigns";
+import { CAMPAIGN_ABI, CAMPAIGN_STATUS, MILESTONE_STATUS } from "../chain";
+import { formatEth } from "../format";
+import type { WalletState } from "../types";
 import { toast } from "react-hot-toast";
 
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {

@@ -1,11 +1,12 @@
 import { ethers } from "ethers";
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
+const FACTORY_ADDRESS =
+  process.env.FACTORY_ADDRESS || "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470";
+
+const FACTORY_ABI = ["function getAllCampaigns() view returns (address[])"];
+
 const CAMPAIGN_ABI = [
   "function oracleApproveMilestone(uint256) external",
   "function oracleRejectMilestone(uint256) external",
@@ -13,25 +14,53 @@ const CAMPAIGN_ABI = [
 ];
 
 export default async function handler(req, res) {
-  // CORS handled by Vercel automatically if configured, or just allowed by default for same-origin
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
     const { campaignAddress, milestoneId, imageB64, locationStr } = req.body;
+    const apiKey = process.env.OPENAI_API_KEY;
     const privateKey = process.env.PRIVATE_KEY;
 
-    if (!privateKey) {
-      return res.status(500).json({ error: "Oracle wallet not configured (PRIVATE_KEY missing)" });
+    if (!apiKey || !privateKey) {
+      return res.status(500).json({ error: "Oracle is not configured." });
+    }
+
+    if (!ethers.isAddress(campaignAddress)) {
+      return res.status(400).json({ error: "Invalid campaign address." });
+    }
+
+    if (!Number.isInteger(milestoneId) || milestoneId < 0) {
+      return res.status(400).json({ error: "Invalid milestone id." });
+    }
+
+    if (typeof imageB64 !== "string" || !imageB64.startsWith("data:image/")) {
+      return res.status(400).json({ error: "Image evidence is required." });
+    }
+
+    if (imageB64.length > 5_000_000) {
+      return res.status(413).json({ error: "Image is too large." });
+    }
+
+    if (typeof locationStr !== "string" || !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(locationStr)) {
+      return res.status(400).json({ error: "Invalid location." });
     }
 
     const provider = new ethers.JsonRpcProvider(RPC_URL);
+    const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
+    const campaigns = await factory.getAllCampaigns();
+    const normalizedCampaign = campaignAddress.toLowerCase();
+    const isRegistered = campaigns.some((address) => address.toLowerCase() === normalizedCampaign);
+
+    if (!isRegistered) {
+      return res.status(403).json({ error: "Campaign is not registered." });
+    }
+
     const wallet = new ethers.Wallet(privateKey, provider);
     const contract = new ethers.Contract(campaignAddress, CAMPAIGN_ABI, wallet);
-    
     const milestone = await contract.getMilestone(milestoneId);
-    const description = milestone.description;
+    const openai = new OpenAI({ apiKey });
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -43,7 +72,7 @@ export default async function handler(req, res) {
         {
           role: "user",
           content: [
-            { type: "text", text: `Milestone Description: ${description}\nLocation: ${locationStr}` },
+            { type: "text", text: `Milestone Description: ${milestone.description}\nLocation: ${locationStr}` },
             { type: "image_url", image_url: { url: imageB64 } }
           ]
         }
@@ -51,7 +80,7 @@ export default async function handler(req, res) {
       max_tokens: 10,
     });
 
-    const decision = response.choices[0].message.content.trim().toUpperCase();
+    const decision = response.choices[0].message.content?.trim().toUpperCase() || "REJECT";
 
     if (decision.includes("APPROVE")) {
       const tx = await contract.oracleApproveMilestone(milestoneId);
@@ -65,6 +94,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error("Oracle Error:", error);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: "Oracle request failed." });
   }
 }

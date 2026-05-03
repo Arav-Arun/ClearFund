@@ -1,12 +1,11 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
-import { useWallet } from "../hooks/useWallet";
+import { useWallet } from "../wallet";
 import Navbar from "./Navbar";
 import Footer from "./Footer";
 import Home from "./Home";
 import CampaignDetail from "./CampaignDetail";
 import CreateCampaign from "./CreateCampaign";
-import "../index.css";
 
 function App() {
   const wallet = useWallet();

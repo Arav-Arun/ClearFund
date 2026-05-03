@@ -1,4 +1,4 @@
-// Shared TypeScript types for ClearFund
+import type { ethers } from "ethers";
 
 export interface CampaignInfo {
   address: string;
@@ -26,8 +26,6 @@ export interface MilestoneInfo {
   evidenceUrl: string;
   vetoEndsAt: number;
 }
-
-import type { ethers } from "ethers";
 
 export interface WalletState {
   account: string | null;
