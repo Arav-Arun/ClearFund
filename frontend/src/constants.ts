@@ -20,8 +20,8 @@ export const SEPOLIA_CHAIN_ID = 11155111;
 // ── Status labels ──
 
 export const CAMPAIGN_STATUS = [
-  "Fundraising",
-  "Active",
+  "Accepting Donations",
+  "In Progress",
   "Completed",
   "Cancelled",
 ] as const;
