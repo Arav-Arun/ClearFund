@@ -68,6 +68,20 @@ function formatTime(value: number | undefined, unit: "ms" | "s") {
   return new Date(unit === "s" ? value * 1000 : value).toLocaleString();
 }
 
+function errorText(err: unknown) {
+  if (err instanceof Error) return err.message;
+  return typeof err === "string" ? err : "";
+}
+
+function friendlyTxError(err: unknown, fallback: string) {
+  const message = errorText(err);
+  if (/insufficient funds/i.test(message)) {
+    return "This wallet does not have enough Sepolia ETH for the donation plus gas. Reduce the amount or add Sepolia ETH.";
+  }
+
+  return message || fallback;
+}
+
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const { address } = useParams<{ address: string }>();
   const { campaign, milestones, loading, refetch } = useCampaign(wallet.provider, address, wallet.account);
@@ -158,7 +172,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
   const handleDonate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!wallet.signer || !address) return toast.error("Connect wallet first");
+    if (!wallet.signer || !wallet.provider || !wallet.account || !address) return toast.error("Connect wallet first");
     if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     
     try {
@@ -167,6 +181,27 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
       setIsDonating(true);
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
+      const balance = await wallet.provider.getBalance(wallet.account);
+
+      if (amount >= balance) {
+        return toast.error(
+          `Wallet balance is ${formatEth(balance, 6)} ETH. Donate less than that so there is ETH left for gas.`,
+          { id: "donate" }
+        );
+      }
+
+      const gas = await contract.donate.estimateGas({ value: amount });
+      const feeData = await wallet.provider.getFeeData();
+      const gasPrice = feeData.maxFeePerGas || feeData.gasPrice || 0n;
+      const needed = amount + gas * gasPrice;
+
+      if (gasPrice > 0n && balance < needed) {
+        return toast.error(
+          `Wallet balance is ${formatEth(balance, 6)} ETH, but this donation needs about ${formatEth(needed, 6)} ETH with gas.`,
+          { id: "donate" }
+        );
+      }
+
       const tx = await contract.donate({ value: amount });
       
       toast.loading("Donating...", { id: "donate" });
@@ -176,7 +211,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       setDonateAmount("");
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Donation failed", { id: "donate" });
+      toast.error(friendlyTxError(err, "Donation failed"), { id: "donate" });
     } finally {
       setIsDonating(false);
     }
