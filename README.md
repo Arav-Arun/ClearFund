@@ -81,6 +81,18 @@ On Vercel, set the project root directory to:
 frontend
 ```
 
+That lets Vercel install the frontend dependencies, run the Vite build, and
+deploy `frontend/api/analyze.js` as `/api/analyze`.
+
+The frontend includes `frontend/vercel.json` with these settings:
+
+```txt
+Framework Preset: Vite
+Install Command: npm install
+Build Command: npm run build
+Output Directory: dist
+```
+
 Then add the environment variables above.
 
 ## Contracts
