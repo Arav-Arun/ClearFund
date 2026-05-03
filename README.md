@@ -1,80 +1,37 @@
+![ClearFund Banner](frontend/assets/clearFundBanner.png)
+
 # ClearFund
 
-A simple, transparent milestone-based donation platform on Ethereum (Sepolia testnet).
+A transparent, milestone based donation platform built on the Ethereum Sepolia testnet.
 
-Donors fund campaigns and vote on milestone evidence with their donation weight. No backend, no AI — everything runs on-chain.
+ClearFund solves the problem of trust in charitable donations. Instead of sending money blindly to an organization and hoping it gets used correctly, donors fund a smart contract escrow. The NGO only receives funds as they prove they have completed specific milestones. Every step of the way is verified on chain, ensuring total accountability and transparency.
 
----
+### Core Concept
 
-## How It Works
+* **Targeted Goals:** NGOs create a campaign with a specific financial goal and a clear breakdown of milestones.
+* **Smart Escrow:** Donated ETH is held safely in a smart contract. An initial bootstrap percentage is released immediately to kickstart the project, while the rest remains locked.
+* **Community Verification:** As the NGO progresses, they submit evidence for each milestone. Donors then vote on whether the evidence is sufficient.
+* **Weighted Voting:** Your voting power is proportional to your donation amount. If the majority approves, the milestone funds are unlocked. If rejected, the NGO must resubmit better evidence.
+* **Donor Protection:** If a campaign fails to reach its fundraising goal by the deadline, the contract allows donors to safely withdraw their contributions.
 
-1. **NGO creates a campaign** via the factory contract, defining a goal, a bootstrap grant (%), and up to 4 milestones.
-2. **Donors send ETH** — once the bootstrap tranche is funded, funds release automatically to the NGO.
-3. **NGO submits evidence** (a URL) for each milestone on-chain.
-4. **Donors vote** — each donor's vote is weighted by how much they donated. If >50% of donated ETH approves, funds release. If >50% rejects, the milestone reverts to Pending for resubmission.
-5. **Refunds** — if fundraising fails (deadline passes without hitting goal), donors can claim a proportional refund.
+### Project Architecture
 
----
+The project is deliberately structured to be clean and explainable, split into two core areas:
 
-## Project Structure
+* **contracts:** Contains the pure Solidity smart contracts `ImpactFundCampaign.sol` and `ImpactFundFactory.sol` that handle all the escrow, voting, and release logic.
+* **frontend:** A lightweight React application using Vite and ethers.js to interact directly with the blockchain, featuring a custom neobrutalist aesthetic.
 
-```
-ClearFund/
-├── contracts/
-│   ├── ImpactFundCampaign.sol   # Per-campaign escrow + voting logic
-│   └── ImpactFundFactory.sol    # Deploys and registers campaigns
-└── frontend/
-    └── src/
-        ├── pages/               # Home, CampaignDetail, CreateCampaign
-        ├── hooks/               # useCampaign, useWallet
-        ├── components/          # Navbar, Footer
-        ├── constants.ts         # ABIs, addresses
-        └── types/               # Shared TypeScript types
-```
+### Getting Started Locally
 
----
+* Navigate into the frontend directory
+* Install dependencies using `npm install`
+* Create a `.env` file and set your `VITE_FACTORY_ADDRESS` and `VITE_SEPOLIA_RPC_URL`
+* Start the local server with `npm run dev`
+* Open the provided localhost link in your browser
 
-## Getting Started
+### Technical Foundation
 
-### 1. Install dependencies
-
-```bash
-# Root (Hardhat)
-npm install
-
-# Frontend (Vite + React)
-cd frontend && npm install
-```
-
-### 2. Configure environment
-
-Copy `.env.example` to `.env` and fill in:
-- `SEPOLIA_RPC_URL` — your Infura/Alchemy endpoint
-- `PRIVATE_KEY` — deployer wallet private key
-- `VITE_FACTORY_ADDRESS` — deployed factory address
-- `VITE_WALLETCONNECT_PROJECT_ID` — from cloud.walletconnect.com
-
-### 3. Deploy contracts
-
-```bash
-npx hardhat compile
-npx hardhat run scripts/deploy.js --network sepolia
-```
-
-### 4. Run the frontend
-
-```bash
-cd frontend
-npm run dev
-```
-
-Open [http://localhost:5173](http://localhost:5173).
-
----
-
-## Tech Stack
-
-- **Smart Contracts** — Solidity 0.8.27, Hardhat, OpenZeppelin ReentrancyGuard
-- **Frontend** — React 19, TypeScript, Vite, ethers.js v6
-- **Wallet** — RainbowKit + wagmi
-- **Network** — Ethereum Sepolia testnet
+* Solidity Smart Contracts
+* React 19 and TypeScript
+* Ethers.js v6 for pure on chain interaction
+* Custom Neobrutalism UI design
