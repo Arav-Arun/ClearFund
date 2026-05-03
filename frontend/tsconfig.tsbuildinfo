@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/campaigndetail.tsx","./src/createcampaign.tsx","./src/footer.tsx","./src/home.tsx","./src/navbar.tsx","./src/constants.ts","./src/format.ts","./src/main.tsx","./src/types.ts","./src/usecampaign.ts","./src/usewallet.ts","./vite.config.ts"],"version":"6.0.2"}

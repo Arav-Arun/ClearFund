@@ -2,16 +2,11 @@
 pragma solidity ^0.8.27;
 
 import "./ImpactFundCampaign.sol";
-import "./DonorNFT.sol";
 
 /// @title ImpactFundFactory — Campaign deployer and registry
 /// @notice Deploys new ImpactFundCampaign contracts with bootstrap grant config
 ///         and maintains a global registry of all campaigns.
 contract ImpactFundFactory {
-    // ──────────────────────────────────────────────
-    // Types
-    // ──────────────────────────────────────────────
-
     struct MilestoneInput {
         string title;
         string description;
@@ -19,57 +14,13 @@ contract ImpactFundFactory {
         uint256 deadline;
     }
 
-    // ──────────────────────────────────────────────
-    // State
-    // ──────────────────────────────────────────────
-
-    /// @notice All deployed campaign addresses
     address[] public campaigns;
-
-    /// @notice NGO wallet → their campaign addresses
     mapping(address => address[]) public campaignsByNGO;
 
-    /// @notice Reference to the shared DonorNFT contract
-    DonorNFT public donorNFT;
+    event CampaignCreated(address indexed campaignAddress, address indexed ngo, string title);
 
-    /// @notice Trusted backend signer address (passed to each campaign)
-    address public backendSigner;
+    constructor() {}
 
-    // ──────────────────────────────────────────────
-    // Events
-    // ──────────────────────────────────────────────
-
-    event CampaignCreated(
-        address indexed campaignAddress,
-        address indexed ngo,
-        string title
-    );
-
-    // ──────────────────────────────────────────────
-    // Constructor
-    // ──────────────────────────────────────────────
-
-    constructor(address _donorNFT, address _backendSigner) {
-        require(_donorNFT != address(0), "Factory: donor NFT address required");
-        require(_backendSigner != address(0), "Factory: backend signer required");
-
-        donorNFT = DonorNFT(_donorNFT);
-        backendSigner = _backendSigner;
-    }
-
-    // ──────────────────────────────────────────────
-    // Create campaign
-    // ──────────────────────────────────────────────
-
-    /// @notice Deploy a new ImpactFundCampaign with bootstrap grant and milestones
-    /// @param _title             Campaign title
-    /// @param _description       Campaign description
-    /// @param _ngoName           Name of the NGO
-    /// @param _bootstrapPercent  Bootstrap grant % (1-15), released when goal hit
-    /// @param _milestones        Milestone inputs (excludes milestone 0 which is auto-created)
-    /// @param _goalAmount        Funding goal in wei
-    /// @param _campaignDeadline  Unix timestamp for fundraising deadline
-    /// @return campaignAddress   Address of newly deployed campaign
     function createCampaign(
         string memory _title,
         string memory _description,
@@ -83,7 +34,6 @@ contract ImpactFundFactory {
         require(bytes(_ngoName).length > 0, "Factory: NGO name required");
         require(_goalAmount > 0, "Factory: goal must be > 0");
 
-        // Validate milestone percentages sum to 100 (of post-bootstrap amount)
         uint256 totalPercent = 0;
         for (uint256 i = 0; i < _milestones.length; i++) {
             totalPercent += _milestones[i].fundPercent;
@@ -101,23 +51,16 @@ contract ImpactFundFactory {
             previousDeadline = _milestones[i].deadline;
         }
 
-        // Deploy new campaign
         ImpactFundCampaign campaign = new ImpactFundCampaign(
-            msg.sender,           // NGO address is the caller
+            msg.sender,
             _title,
             _description,
             _ngoName,
             _goalAmount,
             _campaignDeadline,
-            _bootstrapPercent,
-            address(donorNFT),
-            backendSigner
+            _bootstrapPercent
         );
 
-        // Add user-defined milestones.
-        // Milestone percentages are entered as shares of the post-bootstrap pool.
-        // We convert them to shares of the total goal and assign any rounding remainder
-        // to the final milestone so bootstrap + milestones always cover the full goal.
         uint256 remainingPercent = 100 - _bootstrapPercent;
         uint256 assignedPercent = 0;
         for (uint256 i = 0; i < _milestones.length; i++) {
@@ -134,10 +77,6 @@ contract ImpactFundFactory {
             );
         }
 
-        // Authorize campaign to mint DonorNFTs
-        donorNFT.setAuthorizedMinter(address(campaign), true);
-
-        // Register campaign
         address campaignAddr = address(campaign);
         campaigns.push(campaignAddr);
         campaignsByNGO[msg.sender].push(campaignAddr);
@@ -146,10 +85,6 @@ contract ImpactFundFactory {
 
         return campaignAddr;
     }
-
-    // ──────────────────────────────────────────────
-    // View functions
-    // ──────────────────────────────────────────────
 
     function getAllCampaigns() external view returns (address[] memory) {
         return campaigns;
