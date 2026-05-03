@@ -80,9 +80,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     
     try {
+      const amount = ethers.parseEther(donateAmount || "0");
+      if (amount <= 0n) return toast.error("Enter an ETH amount greater than 0.");
+
       setIsDonating(true);
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
-      const tx = await contract.donate({ value: ethers.parseEther(donateAmount) });
+      const tx = await contract.donate({ value: amount });
       
       toast.loading("Donating...", { id: "donate" });
       await tx.wait();
@@ -150,13 +153,11 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       setOpeningCamera(true);
       toast.loading("Allow camera and location...", { id: "capture" });
 
-      const [stream, position] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: "environment" } },
-        }),
-        getLiveLocation(),
-      ]);
+      const position = await getLiveLocation();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: "environment" } },
+      });
 
       stopCamera();
       streamRef.current = stream;
@@ -317,6 +318,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
               type="number"
               className="neo-input flex-1"
               step="0.01"
+              min="0.000001"
               required
               placeholder="Amount in ETH (Overfunding allowed)"
               value={donateAmount}

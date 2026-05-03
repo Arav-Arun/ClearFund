@@ -86,6 +86,11 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
         deadline: toTimestamp(m.deadline),
       }));
 
+      if (!title.trim() || !description.trim() || !ngoName.trim()) {
+        toast.error("Campaign title, NGO name, and description are required.");
+        return;
+      }
+
       if (parsedGoal <= 0n) {
         toast.error("Goal must be greater than 0 ETH.");
         return;

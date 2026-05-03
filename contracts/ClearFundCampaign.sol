@@ -170,7 +170,7 @@ contract ClearFundCampaign {
         emit DonationReceived(msg.sender, msg.value);
     }
 
-    function startCampaign() external onlyNGO inStatus(CampaignStatus.Fundraising) {
+    function startCampaign() external onlyNGO nonReentrant inStatus(CampaignStatus.Fundraising) {
         require(raisedAmount >= (goalAmount * milestones[0].fundPercent) / 100, "Campaign: bootstrap not reached");
         
         status = CampaignStatus.Active;
@@ -200,6 +200,7 @@ contract ClearFundCampaign {
 
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.Pending || m.status == MilestoneStatus.Rejected, "Campaign: not submittable");
+        require(block.timestamp <= m.deadline, "Campaign: milestone deadline passed");
         
         m.evidenceUrl = evidenceUrl;
         m.status = MilestoneStatus.Submitted;
@@ -288,6 +289,8 @@ contract ClearFundCampaign {
         }
         
         require(activeMilestone > 0, "Campaign: all milestones approved");
+        MilestoneStatus currentStatus = milestones[activeMilestone].status;
+        require(currentStatus == MilestoneStatus.Pending || currentStatus == MilestoneStatus.Rejected, "Campaign: milestone already submitted");
         require(block.timestamp > milestones[activeMilestone].deadline, "Campaign: deadline not passed");
         
         status = CampaignStatus.Cancelled;

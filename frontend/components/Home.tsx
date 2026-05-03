@@ -22,7 +22,8 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         <h1 className="hero-headline">
           Donate with <br />
           <span className="hero-highlight">Accountability.</span> <br />
-          Every Milestone Verified.
+          Every Milestone <br />
+          Verified.
         </h1>
         
         <div className="hero-description-box">

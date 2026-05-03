@@ -44,7 +44,10 @@
 
 /* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+}
 
 body {
   font-family: var(--font);
@@ -52,6 +55,7 @@ body {
   color: var(--text);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -315,6 +319,7 @@ label {
   letter-spacing: 0;
   margin-bottom: 24px;
   color: var(--text);
+  overflow-wrap: break-word;
 }
 
 .hero-highlight {
@@ -323,6 +328,7 @@ label {
   padding: 0 10px;
   display: inline-block;
   transform: rotate(-1deg);
+  max-width: 100%;
 }
 
 .hero-description-box {
@@ -614,6 +620,13 @@ label {
   .navbar-links {
     flex-wrap: wrap;
     justify-content: center;
+    width: 100%;
+  }
+
+  .navbar-links .neo-btn {
+    flex-basis: 100%;
+    max-width: 190px;
+    margin-top: 2px;
   }
 
   .page-container {
@@ -621,12 +634,13 @@ label {
   }
 
   .hero-headline {
-    font-size: 40px;
+    font-size: 30px;
     line-height: 1.08;
   }
 
   .hero-description-box {
     padding: 20px;
+    width: 100%;
   }
 
   .how-it-works-grid,
@@ -657,5 +671,20 @@ label {
 
   .neo-input {
     min-width: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .navbar-link {
+    padding: 6px 10px;
+  }
+
+  .hero-headline {
+    font-size: 28px;
+  }
+
+  .active-header-box {
+    display: block;
+    text-align: center;
   }
 }

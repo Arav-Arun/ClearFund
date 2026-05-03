@@ -104,7 +104,7 @@ export default async function handler(req, res) {
 
     const decision = response.choices[0].message.content?.trim().toUpperCase() || "REJECT";
 
-    if (decision.includes("APPROVE")) {
+    if (decision === "APPROVE") {
       const tx = await contract.oracleApproveMilestone(milestoneId);
       await tx.wait();
       return res.status(200).json({ status: "Approved", txHash: tx.hash });
