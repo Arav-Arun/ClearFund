@@ -529,6 +529,34 @@ label {
   flex-wrap: wrap;
 }
 
+.proof-data {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.proof-data div {
+  display: grid;
+  gap: 3px;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  min-width: 0;
+}
+
+.proof-data strong {
+  color: var(--text);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.proof-data span,
+.proof-data a {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
 .camera-box {
   display: grid;
   gap: 12px;

@@ -182,6 +182,11 @@ function validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr,
     return "Invalid location.";
   }
 
+  const [lat, lng] = locationStr.split(",").map(Number);
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return "Invalid location.";
+  }
+
   return "";
 }
 
@@ -341,7 +346,17 @@ export default async function handler(req, res) {
 
     if (action === "upload") {
       const url = await saveProof({ campaignAddress, milestoneId, imageB64, capturedAt });
-      return res.status(200).json({ evidenceUrl: url });
+      await saveReview({
+        campaignAddress,
+        milestoneId,
+        evidenceUrl: url,
+        locationStr,
+        capturedAt,
+        reviewedAt: 0,
+        chainUpdated: false,
+      });
+
+      return res.status(200).json({ evidenceUrl: url, locationStr, capturedAt });
     }
 
     if (action !== "review") {
@@ -416,6 +431,9 @@ export default async function handler(req, res) {
           summary: review.summary,
           evidenceUrl,
           reviewUrl,
+          locationStr,
+          capturedAt,
+          reviewedAt: baseReview.reviewedAt,
           txHash: tx.hash,
           chainUpdated: true,
         });
@@ -428,6 +446,9 @@ export default async function handler(req, res) {
           summary: review.summary,
           evidenceUrl,
           reviewUrl,
+          locationStr,
+          capturedAt,
+          reviewedAt: baseReview.reviewedAt,
           chainUpdated: false,
           warning,
         });
@@ -445,6 +466,9 @@ export default async function handler(req, res) {
         summary: review.summary,
         evidenceUrl,
         reviewUrl,
+        locationStr,
+        capturedAt,
+        reviewedAt: baseReview.reviewedAt,
         txHash: tx.hash,
         chainUpdated: true,
         warning,
@@ -459,6 +483,9 @@ export default async function handler(req, res) {
       summary: review.summary,
       evidenceUrl,
       reviewUrl,
+      locationStr,
+      capturedAt,
+      reviewedAt: baseReview.reviewedAt,
       chainUpdated: false,
       warning,
     });

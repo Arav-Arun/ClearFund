@@ -33,7 +33,7 @@ properly. ClearFund moves that trust into a transparent workflow:
 | Milestone payouts | Funds are split across NGO-defined milestones. |
 | Bootstrap release | A 1-15% bootstrap tranche is released when fundraising passes the start threshold. |
 | Live evidence | NGOs must capture evidence through the browser camera. No file upload field is exposed. |
-| Public proof images | The captured JPEG is stored as a public proof URL, then that URL is written on-chain for donor review. |
+| Public proof record | The captured JPEG, capture time, GPS location, and AI review data are stored for donor review. |
 | Location permission | Browser geolocation is requested during evidence capture. No manual location input is used. |
 | AI oracle | The Vercel API route sends the live photo, location, and milestone text to OpenAI, then stores the visible AI recommendation and explanation. |
 | Donor veto | Donors can vote no during the 24-hour review window. Non-voters accept the AI recommendation when the window ends. |
@@ -50,9 +50,9 @@ properly. ClearFund moves that trust into a transparent workflow:
 4. The campaign contract releases the bootstrap tranche to the NGO.
 5. For each milestone, the NGO opens the live camera, allows location access,
    captures a fresh photo, and submits the milestone on-chain.
-6. The frontend uploads the live JPEG to proof storage and writes the public
+6. The frontend uploads the live JPEG and public proof metadata, then writes the
    proof URL on-chain with `submitMilestone`.
-7. The frontend sends the photo, location, capture timestamp, proof URL,
+7. The frontend sends the photo, GPS location, capture timestamp, proof URL,
    campaign address, and milestone id to `frontend/api/analyze.js`.
 8. The oracle checks that the campaign is registered, rejects stale evidence,
    asks the model for an `APPROVE` or `REJECT`, and stores what the AI saw plus
@@ -194,7 +194,8 @@ evidence. The intended evidence flow is:
 6. The app sends the JPEG, browser location, timestamp, and proof URL to the
    oracle.
 7. The oracle rejects stale captures before calling the model.
-8. Donors can see the proof image, AI decision, and AI analysis before voting.
+8. Donors can see the proof image, capture time, GPS location, AI decision, and
+   AI analysis before voting.
 
 Important security note: browser camera and geolocation reduce lazy fraud, but
 they are not perfect proof of reality. That is why ClearFund keeps the donor

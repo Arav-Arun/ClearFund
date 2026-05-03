@@ -16,6 +16,7 @@ type OracleResult = AIReviewInfo & {
   evidenceUrl?: string;
   locationStr?: string;
   capturedAt?: number;
+  reviewUrl?: string;
   warning?: string;
   chainUpdated?: boolean;
 };
@@ -39,6 +40,27 @@ function getLiveLocation() {
 
 function isPublicProofUrl(value: string | undefined) {
   return !!value && /^https:\/\//i.test(value);
+}
+
+function hasAiAnalysis(review: OracleResult | undefined) {
+  return !!review?.summary || review?.decision === "APPROVE" || review?.decision === "REJECT";
+}
+
+function mapLocation(value: string | undefined) {
+  const [lat, lng] = String(value || "").split(",").map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return null;
+  }
+
+  return {
+    label: `${lat}, ${lng}`,
+    url: `https://www.google.com/maps?q=${lat},${lng}`,
+  };
+}
+
+function formatTime(value: number | undefined, unit: "ms" | "s") {
+  if (!value) return "";
+  return new Date(unit === "s" ? value * 1000 : value).toLocaleString();
 }
 
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
@@ -89,6 +111,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           evidenceUrl: review.evidenceUrl,
           locationStr: review.locationStr,
           capturedAt: review.capturedAt,
+          reviewUrl: review.reviewUrl,
           warning: review.warning,
           chainUpdated: review.chainUpdated,
         }] as const;
@@ -310,8 +333,11 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           approved: result.decision === "APPROVE",
           decision: result.decision,
           summary: result.summary,
-          reviewedAt: Math.floor(Date.now() / 1000),
+          reviewedAt: Number(result.reviewedAt || Math.floor(Date.now() / 1000)),
           evidenceUrl: result.evidenceUrl || evidenceUrl,
+          locationStr: result.locationStr || locationStr,
+          capturedAt: Number(result.capturedAt || capturedAt),
+          reviewUrl: result.reviewUrl,
           warning: result.warning,
           chainUpdated: result.chainUpdated,
         },
@@ -503,7 +529,14 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             ? milestone.evidenceUrl
             : isPublicProofUrl(offchainReview?.evidenceUrl) ? offchainReview.evidenceUrl : "";
           const proofMissing = milestone.id > 0 && milestone.status > 0 && !proofUrl;
-          const reviewColor = review ? (review.approved ? "var(--success)" : "var(--danger)") : "var(--warning)";
+          const aiReady = hasAiAnalysis(review);
+          const reviewColor = aiReady ? (review?.approved ? "var(--success)" : "var(--danger)") : "var(--warning)";
+          const location = mapLocation(review?.locationStr);
+          const capturedTime = formatTime(review?.capturedAt, "ms");
+          const reviewedTime = formatTime(review?.reviewedAt, "s");
+          const publicReviewUrl = offchainReview && address
+            ? `/api/analyze?campaignAddress=${address}&milestoneId=${milestone.id}`
+            : "";
 
           return (
             <div key={milestone.id} className="neo-card milestone-card">
@@ -532,6 +565,35 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                       Open full image
                     </a>
                   </div>
+                  {(capturedTime || location || reviewedTime || publicReviewUrl) && (
+                    <div className="proof-data">
+                      {capturedTime && (
+                        <div>
+                          <strong>Captured</strong>
+                          <span>{capturedTime}</span>
+                        </div>
+                      )}
+                      {location && (
+                        <div>
+                          <strong>Live GPS</strong>
+                          <span className="font-mono">{location.label}</span>
+                          <a href={location.url} target="_blank" rel="noreferrer">Open map</a>
+                        </div>
+                      )}
+                      {reviewedTime && (
+                        <div>
+                          <strong>AI reviewed</strong>
+                          <span>{reviewedTime}</span>
+                        </div>
+                      )}
+                      {publicReviewUrl && (
+                        <div>
+                          <strong>Review data</strong>
+                          <a href={publicReviewUrl} target="_blank" rel="noreferrer">Open JSON</a>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -588,8 +650,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
               {milestone.status === 1 && (
                 <div className="review-box mt-4">
                   <p className="mb-2 text-sm font-bold" style={{ color: reviewColor }}>
-                    {review
-                      ? `AI analyzed this proof and recommends ${review.approved ? "approval" : "rejection"}.`
+                    {aiReady
+                      ? `AI analyzed this proof and recommends ${review?.approved ? "approval" : "rejection"}.`
                       : "Proof is submitted on-chain. AI Oracle review is pending."}
                   </p>
                   {review?.summary && (
@@ -603,7 +665,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                       Donors can see the proof image above. Voting starts after the oracle writes the review on-chain.
                     </p>
                   )}
-                  {review && (
+                  {aiReady && (
                     <p className="text-xs text-secondary mt-2">
                       The vote button appears only after the smart contract status changes from Submitted to 24h Review.
                     </p>
@@ -619,7 +681,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
               {milestone.status === 2 && (
                 <div className="review-box mt-4">
                   <p className="mb-2 text-sm font-bold" style={{ color: reviewColor }}>
-                    {review ? `AI recommends ${review.approved ? "approval" : "rejection"}.` : "AI review recorded."} 24-hour donor review active.
+                    {aiReady ? `AI recommends ${review?.approved ? "approval" : "rejection"}.` : "AI review recorded."} 24-hour donor review active.
                   </p>
                   {review?.summary ? (
                     <p className="text-xs mb-3 text-secondary whitespace-pre-line">{review.summary}</p>
