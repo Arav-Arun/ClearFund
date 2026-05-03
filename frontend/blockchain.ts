@@ -14,16 +14,20 @@ export const FACTORY_ADDRESS = (
 
 const LEGACY_FACTORY_ADDRESSES = [
   "0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470",
-  "0x6A837595E2592d699d48eB2DAcF47Df9493035d2",
 ];
 
 function uniqueAddresses(addresses: string[]) {
   const seen = new Set<string>();
+  const blocked = new Set([
+    // Older demo factory uses incompatible campaign/oracle contracts.
+    "0x6a837595e2592d699d48eb2dacf47df9493035d2",
+  ]);
 
   return addresses.map((address) => address.trim()).filter((address) => {
     if (!ethers.isAddress(address)) return false;
 
     const key = address.toLowerCase();
+    if (blocked.has(key)) return false;
     if (seen.has(key)) return false;
 
     seen.add(key);

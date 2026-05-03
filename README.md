@@ -188,16 +188,16 @@ veto window as a human review layer after AI approval.
 
 ## Deployed Sepolia Factories
 
-The frontend reads from the current factory and older factories so previously
-created campaign tiles remain visible.
+The frontend reads from the current factory and the Urban Oasis factory. The
+older demo factory is intentionally blocked because its campaigns use
+incompatible oracle contracts.
 
 ```txt
 Current factory:
 0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
 
-Legacy read fallbacks:
+Urban Oasis fallback:
 0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
-0x6A837595E2592d699d48eB2DAcF47Df9493035d2
 ```
 
 If you redeploy the contracts, update:
@@ -240,7 +240,7 @@ Client-side variables:
 ```txt
 VITE_WALLETCONNECT_PROJECT_ID=your_reown_or_walletconnect_project_id
 VITE_FACTORY_ADDRESS=0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
-VITE_FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470,0x6A837595E2592d699d48eB2DAcF47Df9493035d2
+VITE_FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
 VITE_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 ```
 
@@ -251,7 +251,7 @@ OPENAI_API_KEY=your_openai_key
 PRIVATE_KEY=oracle_wallet_private_key
 SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 FACTORY_ADDRESS=0x9F2F3AEF7960eBf8f578d7174FB8f3135394b398
-FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470,0x6A837595E2592d699d48eB2DAcF47Df9493035d2
+FACTORY_ADDRESSES=0x412A33fbcaa3Ac0f6E5a0255F9779aAB8E8e1470
 ```
 
 Never commit `.env`, private keys, API keys, deployment metadata, or generated
