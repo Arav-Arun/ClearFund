@@ -17,7 +17,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
   return (
     <div className="page-container">
       {/* ── Hero Section ── */}
-      <section className="text-center mb-24 pt-12">
+      <section className="text-center mb-16 pt-8">
         <h1 className="hero-headline">
           Donate with <br />
           <span className="hero-highlight">Accountability.</span> <br />
@@ -27,7 +27,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         <div className="hero-description-box">
           <p className="text-secondary font-medium" style={{ fontSize: "16px" }}>
             Fund real-world impact on the blockchain. Your ETH stays locked 
-            in escrow until NGOs prove progress — verified by the community 
+            in escrow until NGOs prove progress, verified by the community 
             and smart contract logic.
           </p>
         </div>
@@ -49,8 +49,8 @@ export default function Home({ wallet }: { wallet: WalletState }) {
       </section>
 
       {/* ── How It Works ── */}
-      <section className="mb-32" style={{ marginTop: "120px" }}>
-        <h2 className="text-center font-extrabold text-4xl mb-16 uppercase tracking-tight" style={{ color: "var(--accent)" }}>
+      <section className="mb-24" style={{ marginTop: "48px" }}>
+        <h2 className="text-center font-extrabold text-3xl mb-12 uppercase tracking-tight" style={{ color: "var(--accent)" }}>
           How It Works
         </h2>
         <div className="how-it-works-grid">
@@ -102,8 +102,8 @@ export default function Home({ wallet }: { wallet: WalletState }) {
       </section>
 
       {/* ── Active Campaigns ── */}
-      <section id="active-campaigns" style={{ paddingTop: "80px" }}>
-        <div className="active-header-box mb-12">
+      <section id="active-campaigns" style={{ paddingTop: "40px" }}>
+        <div className="active-header-box mb-8">
           Active Campaigns
         </div>
 
