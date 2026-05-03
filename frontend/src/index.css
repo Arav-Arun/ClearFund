@@ -475,10 +475,10 @@ label {
    FOOTER
    ═══════════════════════════════════════════════ */
 .footer {
-  padding: 64px 32px;
+  padding: 32px;
   background: var(--bg-raised);
   border-top: 3px solid var(--border);
-  margin-top: 80px;
+  margin-top: 40px;
 }
 
 .footer-content {

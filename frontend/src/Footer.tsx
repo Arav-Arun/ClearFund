@@ -14,27 +14,35 @@ export default function Footer() {
           </p>
         </div>
         
-        <div className="flex gap-8">
+        <div className="flex gap-6">
+          <a 
+            href="https://aravarun.xyz" 
+            target="_blank" 
+            rel="noreferrer"
+            className="font-bold text-sm uppercase tracking-wider hover:underline"
+          >
+            My Portfolio
+          </a>
+          <a 
+            href="https://github.com/Arav-Arun/ClearFund" 
+            target="_blank" 
+            rel="noreferrer"
+            className="font-bold text-sm uppercase tracking-wider hover:underline"
+          >
+            Github Repo
+          </a>
           <a 
             href={`${BLOCK_EXPLORER_URL}/address/${FACTORY_ADDRESS}`} 
             target="_blank" 
             rel="noreferrer"
             className="font-bold text-sm uppercase tracking-wider hover:underline"
           >
-            Contract
-          </a>
-          <a 
-            href="https://github.com/Arav-Arun/ImpactFund" 
-            target="_blank" 
-            rel="noreferrer"
-            className="font-bold text-sm uppercase tracking-wider hover:underline"
-          >
-            Source
+            Contracts
           </a>
         </div>
       </div>
       
-      <div className="text-center mt-12 pt-8 border-t border-[#3c4043] text-xs text-muted">
+      <div className="text-center mt-8 pt-4 border-t border-[#3c4043] text-xs text-muted">
         © {new Date().getFullYear()} ClearFund. Built for transparency.
       </div>
     </footer>
