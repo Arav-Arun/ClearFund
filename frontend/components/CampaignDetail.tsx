@@ -6,6 +6,7 @@ import {
   CAMPAIGN_STATUS,
   MILESTONE_STATUS,
   formatEth,
+  humanError,
   useCampaign,
 } from "../blockchain";
 import type { AIReviewInfo, WalletState } from "../blockchain";
@@ -68,18 +69,33 @@ function formatTime(value: number | undefined, unit: "ms" | "s") {
   return new Date(unit === "s" ? value * 1000 : value).toLocaleString();
 }
 
-function errorText(err: unknown) {
-  if (err instanceof Error) return err.message;
-  return typeof err === "string" ? err : "";
-}
-
-function friendlyTxError(err: unknown, fallback: string) {
-  const message = errorText(err);
-  if (/insufficient funds/i.test(message)) {
-    return "This wallet does not have enough Sepolia ETH for the donation plus gas. Reduce the amount or add Sepolia ETH.";
-  }
-
-  return message || fallback;
+function oracleAuthMessage({
+  action,
+  campaignAddress,
+  milestoneId,
+  evidenceUrl = "",
+  locationStr = "",
+  capturedAt = 0,
+  imageHash = "",
+}: {
+  action: string;
+  campaignAddress: string;
+  milestoneId: number;
+  evidenceUrl?: string;
+  locationStr?: string;
+  capturedAt?: number;
+  imageHash?: string;
+}) {
+  return [
+    "ClearFund oracle request",
+    `Action: ${action}`,
+    `Campaign: ${campaignAddress}`,
+    `Milestone: ${milestoneId}`,
+    `Evidence: ${evidenceUrl}`,
+    `Location: ${locationStr}`,
+    `Captured: ${capturedAt}`,
+    `ImageHash: ${imageHash}`,
+  ].join("\n");
 }
 
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
@@ -96,6 +112,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const [locationStr, setLocationStr] = useState("");
   const [capturedAt, setCapturedAt] = useState<number | null>(null);
   const [openingCamera, setOpeningCamera] = useState(false);
+  const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [submittingMilestone, setSubmittingMilestone] = useState<number | null>(null);
   const [oracleResults, setOracleResults] = useState<Record<number, OracleResult>>({});
 
@@ -113,11 +130,17 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   useEffect(() => stopCamera, []);
 
   useEffect(() => {
+    setOracleResults({});
+  }, [address]);
+
+  useEffect(() => {
     if (!address || milestones.length === 0) return;
 
     let active = true;
+    const reviewMilestones = milestones.filter((milestone) => milestone.id > 0 && milestone.status > 0);
+    const reviewIds = new Set(reviewMilestones.map((milestone) => milestone.id));
     Promise.all(
-      milestones.filter((milestone) => milestone.id > 0).map(async (milestone) => {
+      reviewMilestones.map(async (milestone) => {
         const response = await fetch(`/api/analyze?campaignAddress=${address}&milestoneId=${milestone.id}`);
         if (!response.ok) return null;
         const review = await response.json();
@@ -138,10 +161,11 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     ).then((rows) => {
       if (!active) return;
       const next = rows.filter(Boolean) as Array<readonly [number, OracleResult]>;
-      if (next.length === 0) return;
 
       setOracleResults((current) => ({
-        ...current,
+        ...Object.fromEntries(
+          Object.entries(current).filter(([milestoneId]) => reviewIds.has(Number(milestoneId)))
+        ),
         ...Object.fromEntries(next),
       }));
     }).catch(() => {
@@ -176,7 +200,13 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     if (wallet.isWrongNetwork) return toast.error("Switch to Sepolia first");
     
     try {
-      const amount = ethers.parseEther(donateAmount || "0");
+      let amount: bigint;
+      try {
+        amount = ethers.parseEther(donateAmount || "0");
+      } catch {
+        toast.error("Enter a valid ETH amount.", { id: "donate" });
+        return;
+      }
       if (amount <= 0n) return toast.error("Enter an ETH amount greater than 0.");
 
       setIsDonating(true);
@@ -211,7 +241,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       setDonateAmount("");
       refetch();
     } catch (err: unknown) {
-      toast.error(friendlyTxError(err, "Donation failed"), { id: "donate" });
+      toast.error(humanError(err, "Donation failed"), { id: "donate" });
     } finally {
       setIsDonating(false);
     }
@@ -228,7 +258,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       toast.success("Campaign Started!", { id: "start" });
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to start", { id: "start" });
+      toast.error(humanError(err, "Failed to start"), { id: "start" });
     }
   };
 
@@ -243,7 +273,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       toast.success("Campaign Cancelled. You can now claim refunds.", { id: "cancel" });
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to cancel", { id: "cancel" });
+      toast.error(humanError(err, "Failed to cancel"), { id: "cancel" });
     }
   };
 
@@ -258,7 +288,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       toast.success("Refund claimed.", { id: "refund" });
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Refund failed", { id: "refund" });
+      toast.error(humanError(err, "Refund failed"), { id: "refund" });
     }
   };
 
@@ -293,23 +323,32 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     }
   };
 
-  const handleCapturePhoto = () => {
+  const handleCapturePhoto = async () => {
     const video = videoRef.current;
-    if (!video || !video.videoWidth || !locationStr) return toast.error("Camera and location are not ready.");
+    if (!video || !video.videoWidth) return toast.error("Camera is not ready.");
 
-    const width = Math.min(video.videoWidth, 1280);
-    const height = Math.round((video.videoHeight * width) / video.videoWidth);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) return toast.error("Could not capture photo.");
-    context.drawImage(video, 0, 0, width, height);
+    try {
+      setCapturingPhoto(true);
+      const position = await getLiveLocation();
+      const width = Math.min(video.videoWidth, 1280);
+      const height = Math.round((video.videoHeight * width) / video.videoWidth);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) return toast.error("Could not capture photo.");
+      context.drawImage(video, 0, 0, width, height);
 
-    setEvidenceImage(canvas.toDataURL("image/jpeg", 0.82));
-    setCapturedAt(Date.now());
-    stopCamera();
-    toast.success("Live evidence captured.");
+      setLocationStr(`${position.coords.latitude},${position.coords.longitude}`);
+      setEvidenceImage(canvas.toDataURL("image/jpeg", 0.82));
+      setCapturedAt(Date.now());
+      stopCamera();
+      toast.success("Live evidence and GPS captured.");
+    } catch {
+      toast.error("Live location is required at capture time.");
+    } finally {
+      setCapturingPhoto(false);
+    }
   };
 
   const clearEvidence = () => {
@@ -321,9 +360,17 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   };
 
   const uploadProof = async (milestoneId: number) => {
-    if (!address || !evidenceImage || !capturedAt || !locationStr) {
+    if (!wallet.signer || !address || !evidenceImage || !capturedAt || !locationStr) {
       throw new Error("Live camera photo and location required");
     }
+    const signature = await wallet.signer.signMessage(oracleAuthMessage({
+      action: "upload",
+      campaignAddress: address,
+      milestoneId,
+      locationStr,
+      capturedAt,
+      imageHash: ethers.id(evidenceImage),
+    }));
 
     const response = await fetch("/api/analyze", {
       method: "POST",
@@ -335,6 +382,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         imageB64: evidenceImage,
         locationStr,
         capturedAt,
+        signature,
       }),
     });
 
@@ -344,9 +392,15 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   };
 
   const sendToOracle = async (milestoneId: number, evidenceUrl: string) => {
-    if (!address || !evidenceUrl) {
+    if (!wallet.signer || !address || !evidenceUrl) {
       throw new Error("Public proof URL required");
     }
+    const signature = await wallet.signer.signMessage(oracleAuthMessage({
+      action: "review",
+      campaignAddress: address,
+      milestoneId,
+      evidenceUrl,
+    }));
 
     const response = await fetch("/api/analyze", {
       method: "POST",
@@ -356,6 +410,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         campaignAddress: address,
         milestoneId,
         evidenceUrl,
+        signature,
       }),
     });
 
@@ -408,12 +463,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       try {
         await sendToOracle(milestoneId, evidenceUrl);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Request failed";
+        const message = humanError(err, "Request failed");
         toast.error(`Oracle Error: ${message}. Retry in a few seconds.`, { id: "submit" });
       }
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to submit", { id: "submit" });
+      toast.error(humanError(err, "Failed to submit"), { id: "submit" });
     } finally {
       setSubmittingMilestone(null);
     }
@@ -432,7 +487,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       await sendToOracle(milestoneId, evidenceUrl);
       refetch();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Oracle request failed";
+      const message = humanError(err, "Oracle request failed");
       toast.error(`Oracle Error: ${message}`, { id: "submit" });
     } finally {
       setSubmittingMilestone(null);
@@ -450,7 +505,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       toast.success("No vote recorded. Final outcome still waits for 24 hours.", { id: "veto" });
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Veto failed", { id: "veto" });
+      toast.error(humanError(err, "Veto failed"), { id: "veto" });
     }
   };
 
@@ -465,7 +520,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       toast.success("Review finalized.", { id: "execute" });
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Execute failed", { id: "execute" });
+      toast.error(humanError(err, "Execute failed"), { id: "execute" });
     }
   };
 
@@ -503,11 +558,11 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         )}
 
         {campaign.status === 0 && (
-          <form onSubmit={handleDonate} className="flex gap-4 mb-4">
+          <form onSubmit={handleDonate} className="flex gap-4 mb-4" noValidate>
             <input
               type="number"
               className="neo-input flex-1"
-              step="0.01"
+              step="any"
               min="0.000001"
               required
               placeholder="Amount in ETH (Overfunding allowed)"
@@ -560,9 +615,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             : undefined;
           const review = offchainReview || chainReview;
           const canSubmitProof = isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 4);
-          const proofUrl = isPublicProofUrl(milestone.evidenceUrl)
-            ? milestone.evidenceUrl
-            : isPublicProofUrl(offchainReview?.evidenceUrl) ? offchainReview.evidenceUrl : "";
+          const onchainProofUrl = isPublicProofUrl(milestone.evidenceUrl) ? milestone.evidenceUrl : "";
+          const storedProofMatchesChain = milestone.status > 0
+            && isPublicProofUrl(offchainReview?.evidenceUrl)
+            && (!milestone.evidenceUrl || offchainReview?.evidenceUrl === milestone.evidenceUrl);
+          const storedProofUrl = storedProofMatchesChain ? offchainReview?.evidenceUrl || "" : "";
+          const proofUrl = onchainProofUrl || storedProofUrl;
           const proofMissing = milestone.id > 0 && milestone.status > 0 && !proofUrl;
           const aiReady = hasAiAnalysis(review);
           const summary = reviewSummary(review?.summary);
@@ -659,8 +717,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                     </button>
 
                     {evidenceMilestoneId === milestone.id && !evidenceImage && streamRef.current && (
-                      <button className="neo-btn neo-btn-primary" onClick={handleCapturePhoto}>
-                        Capture Photo
+                      <button className="neo-btn neo-btn-primary" disabled={capturingPhoto} onClick={handleCapturePhoto}>
+                        {capturingPhoto ? "Capturing..." : "Capture Photo"}
                       </button>
                     )}
 

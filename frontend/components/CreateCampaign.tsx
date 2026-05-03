@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ethers } from "ethers";
-import { FACTORY_ADDRESS, FACTORY_ABI } from "../blockchain";
+import { FACTORY_ADDRESS, FACTORY_ABI, humanError } from "../blockchain";
 import type { WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
@@ -79,9 +79,16 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
       const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, wallet.signer);
 
       const now = Math.floor(Date.now() / 1000);
-      const parsedGoal = ethers.parseEther(goalAmount);
       const parsedDeadline = toTimestamp(campaignDeadline);
       const parsedBootstrap = Number(bootstrapPercent);
+      let parsedGoal: bigint;
+
+      try {
+        parsedGoal = ethers.parseEther(goalAmount || "0");
+      } catch {
+        toast.error("Enter a valid ETH goal amount.");
+        return;
+      }
 
       const formattedMilestones = milestones.map((m) => ({
         title: m.title.trim(),
@@ -105,7 +112,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
         return;
       }
 
-      if (parsedBootstrap < 1 || parsedBootstrap > 15) {
+      if (!Number.isInteger(parsedBootstrap) || parsedBootstrap < 1 || parsedBootstrap > 15) {
         toast.error("Bootstrap must be between 1% and 15%.");
         return;
       }
@@ -121,15 +128,18 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
         return;
       }
 
+      const remainingPercent = 100 - parsedBootstrap;
+      let assignedPercent = 0;
+
       let previousDeadline = parsedDeadline;
-      for (const milestone of formattedMilestones) {
+      for (const [index, milestone] of formattedMilestones.entries()) {
         if (!milestone.title || !milestone.description) {
           toast.error("Every milestone needs a title and description.");
           return;
         }
 
-        if (!Number.isFinite(milestone.fundPercent) || milestone.fundPercent < 1 || milestone.fundPercent > 100) {
-          toast.error("Each milestone fund percent must be between 1 and 100.");
+        if (!Number.isInteger(milestone.fundPercent) || milestone.fundPercent < 1 || milestone.fundPercent > 100) {
+          toast.error("Each milestone fund percent must be a whole number between 1 and 100.");
           return;
         }
 
@@ -137,6 +147,15 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
           toast.error("Milestone deadlines must be after fundraising and in order.");
           return;
         }
+
+        const actualPercent = index === formattedMilestones.length - 1
+          ? remainingPercent - assignedPercent
+          : Math.floor((milestone.fundPercent * remainingPercent) / 100);
+        if (actualPercent <= 0) {
+          toast.error("Each milestone must receive at least 1% after the bootstrap split.");
+          return;
+        }
+        assignedPercent += actualPercent;
 
         previousDeadline = milestone.deadline;
       }
@@ -180,7 +199,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
 
     } catch (err: unknown) {
       console.error(err);
-      toast.error(err instanceof Error ? err.message : "Failed to create campaign", { id: "tx" });
+      toast.error(humanError(err, "Failed to create campaign"), { id: "tx" });
     } finally {
       setIsSubmitting(false);
     }
@@ -190,7 +209,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
     <div className="page-container" style={{ maxWidth: 640 }}>
       <h1 className="page-title mb-6">Create Campaign</h1>
       
-      <form onSubmit={handleSubmit} className="neo-card flex flex-col gap-4">
+      <form onSubmit={handleSubmit} className="neo-card flex flex-col gap-4" noValidate>
         <div>
           <label className="neo-label">Campaign Title</label>
           <input
@@ -233,7 +252,7 @@ export default function CreateCampaign({ wallet }: { wallet: WalletState }) {
             <input
               className="neo-input"
               type="number"
-              step="0.01"
+              step="any"
               required
               placeholder="e.g. 10.5"
               value={goalAmount}

@@ -119,8 +119,11 @@ contract ClearFundCampaign {
         uint256 _campaignDeadline,
         uint256 _bootstrapPercent
     ) {
+        require(_ngoAddress != address(0), "Campaign: NGO required");
         require(_goalAmount > 0, "Campaign: goal must be > 0");
         require(_oracleAddress != address(0), "Campaign: oracle required");
+        require(_campaignDeadline > block.timestamp, "Campaign: deadline must be future");
+        require(_bootstrapPercent >= 1 && _bootstrapPercent <= 15, "Campaign: invalid bootstrap");
         ngoAddress = _ngoAddress;
         oracleAddress = _oracleAddress;
         title = _title;
@@ -207,6 +210,7 @@ contract ClearFundCampaign {
         require(milestoneId > 0 && milestoneId < milestones.length, "Campaign: invalid id");
         require(bootstrapReleased, "Campaign: bootstrap not released");
         require(_previousMilestoneApproved(milestoneId), "Campaign: previous not approved");
+        require(_isHttpsUrl(evidenceUrl), "Campaign: invalid proof URL");
 
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.Pending || m.status == MilestoneStatus.Rejected, "Campaign: not submittable");
@@ -318,7 +322,9 @@ contract ClearFundCampaign {
         
         require(activeMilestone > 0, "Campaign: all milestones approved");
         MilestoneStatus currentStatus = milestones[activeMilestone].status;
-        require(currentStatus == MilestoneStatus.Pending || currentStatus == MilestoneStatus.Rejected, "Campaign: milestone already submitted");
+        bool missedDeadline = currentStatus == MilestoneStatus.Pending || currentStatus == MilestoneStatus.Rejected;
+        bool oracleStalled = currentStatus == MilestoneStatus.Submitted && block.timestamp > milestones[activeMilestone].deadline + 1 days;
+        require(missedDeadline || oracleStalled, "Campaign: milestone cannot be cancelled yet");
         require(block.timestamp > milestones[activeMilestone].deadline, "Campaign: deadline not passed");
         
         status = CampaignStatus.Cancelled;
@@ -359,6 +365,20 @@ contract ClearFundCampaign {
     function _previousMilestoneApproved(uint256 milestoneId) internal view returns (bool) {
         if (milestoneId == 0) return true;
         return milestones[milestoneId - 1].status == MilestoneStatus.Approved;
+    }
+
+    function _isHttpsUrl(string memory url) internal pure returns (bool) {
+        bytes memory value = bytes(url);
+        return value.length >= 8
+            && value.length <= 2048
+            && value[0] == 0x68
+            && value[1] == 0x74
+            && value[2] == 0x74
+            && value[3] == 0x70
+            && value[4] == 0x73
+            && value[5] == 0x3a
+            && value[6] == 0x2f
+            && value[7] == 0x2f;
     }
 
     function getCampaign() external view returns (CampaignView memory) {

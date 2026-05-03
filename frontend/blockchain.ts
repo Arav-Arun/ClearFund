@@ -257,6 +257,70 @@ export function formatEth(value: bigint, maxDecimals = 4): string {
   }).format(num);
 }
 
+export function humanError(err: unknown, fallback = "Something went wrong. Please try again.") {
+  const error = err as {
+    reason?: string;
+    shortMessage?: string;
+    message?: string;
+    data?: { message?: string };
+    info?: { error?: { message?: string } };
+  };
+  const raw = String(
+    typeof err === "string"
+      ? err
+      : error?.reason || error?.shortMessage || error?.info?.error?.message || error?.data?.message || error?.message || ""
+  );
+  const message = raw.replace(/\s*\(transaction=\{[\s\S]*/i, "").replace(/\s*\{[\s\S]*/i, "").trim();
+
+  if (!message) return fallback;
+  if (/user rejected|user denied|rejected the request|action rejected/i.test(message)) {
+    return "Transaction cancelled in your wallet.";
+  }
+  if (/insufficient funds/i.test(message)) {
+    return "This wallet does not have enough Sepolia ETH for the amount plus gas.";
+  }
+  if (/invalid (fixednumber|string|decimal|value)|invalid number|not a valid number/i.test(message)) {
+    return "Enter a valid number.";
+  }
+  if (/nonce|replacement fee|underpriced/i.test(message)) {
+    return "Your wallet has a pending transaction. Wait a moment and try again.";
+  }
+
+  const friendlyContracts: Array<[RegExp, string]> = [
+    [/Campaign: NGO cannot donate/i, "The NGO wallet cannot donate to its own campaign."],
+    [/Campaign: deadline passed/i, "This deadline has already passed."],
+    [/Campaign: invalid status/i, "This action is not available for the campaign right now."],
+    [/Campaign: caller is not the NGO/i, "Only the NGO wallet can do this."],
+    [/Campaign: caller is not a donor/i, "Only donors in this campaign can do this."],
+    [/Campaign: previous not approved/i, "The previous milestone must be approved first."],
+    [/Campaign: not submittable/i, "This milestone is not ready for a new proof."],
+    [/Campaign: milestone deadline passed/i, "This milestone deadline has passed."],
+    [/Campaign: not submitted/i, "Submit proof before asking the oracle to review it."],
+    [/Campaign: veto period active/i, "The 24-hour review window is still active."],
+    [/Campaign: not in veto phase/i, "Voting is not open for this milestone right now."],
+    [/Campaign: already voted/i, "This wallet already voted no for this review."],
+    [/Campaign: refund not available/i, "Refunds are not available for this campaign yet."],
+    [/Campaign: refunded/i, "This wallet already claimed its refund."],
+    [/Factory: milestone percent too small/i, "Each milestone must receive at least 1% after the bootstrap split."],
+    [/Factory: milestone percentages must sum to 100/i, "Milestone percentages must add up to 100%."],
+    [/Factory: 2-5 milestones required/i, "Create between 2 and 5 milestones."],
+    [/Factory: bootstrap must be 1-15/i, "Bootstrap must be between 1% and 15%."],
+    [/Proof storage is not configured/i, "Proof storage is not configured on Vercel."],
+    [/NGO wallet signature is required/i, "Please sign the proof request with the NGO wallet."],
+    [/Only the campaign NGO can submit proof/i, "Only the campaign NGO wallet can submit proof to the oracle."],
+    [/Stored proof metadata does not match/i, "The stored proof does not match the on-chain proof. Capture and submit fresh proof."],
+    [/Oracle proof does not match/i, "The oracle can only review the proof URL stored on-chain."],
+  ];
+
+  for (const [pattern, text] of friendlyContracts) {
+    if (pattern.test(message)) return text;
+  }
+
+  const revert = message.match(/(?:execution reverted:|reverted with reason string)\s*['"]?([^'"]+)/i);
+  const cleaned = (revert?.[1] || message).replace(/^Error:\s*/i, "").trim();
+  return cleaned.length > 180 ? fallback : cleaned;
+}
+
 export function useWallet(): WalletState {
   const { address, chainId, isConnected, isConnecting, isReconnecting } = useAccount();
   const { openConnectModal } = useConnectModal();
@@ -366,34 +430,53 @@ export function useAllCampaigns(provider: ethers.AbstractProvider | null) {
   const [error, setError] = useState<string | null>(null);
 
   const fetchCampaigns = useCallback(async () => {
-    if (!provider) return;
     setLoading(true);
     setError(null);
 
-    try {
-      const loaded = (
-        await Promise.all(
-          FACTORY_ADDRESSES.map(async (factoryAddress) => {
-            try {
-              const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
-              const addresses: string[] = await factory.getAllCampaigns();
-              const rows = await Promise.allSettled(
-                addresses.map((address) => readCampaign(provider, factoryAddress, address))
-              );
+    if (!provider) {
+      setCampaigns([]);
+      setError("Sepolia RPC is not configured. Add VITE_SEPOLIA_RPC_URL or connect a Sepolia wallet.");
+      setLoading(false);
+      return;
+    }
 
-              return rows.flatMap((row) => row.status === "fulfilled" ? [row.value] : []);
-            } catch (err) {
-              console.error("Could not read factory:", factoryAddress, err);
-              return [];
-            }
-          })
-        )
-      ).flat();
+    if (FACTORY_ADDRESSES.length === 0) {
+      setCampaigns([]);
+      setError("No active factory is configured. Check VITE_FACTORY_ADDRESS.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const results = await Promise.all(
+        FACTORY_ADDRESSES.map(async (factoryAddress) => {
+          try {
+            const factory = new ethers.Contract(factoryAddress, FACTORY_ABI, provider);
+            const addresses: string[] = await factory.getAllCampaigns();
+            const rows = await Promise.allSettled(
+              addresses.map((address) => readCampaign(provider, factoryAddress, address))
+            );
+
+            return {
+              ok: true,
+              campaigns: rows.flatMap((row) => row.status === "fulfilled" ? [row.value] : []),
+            };
+          } catch (err) {
+            console.error("Could not read factory:", factoryAddress, err);
+            return { ok: false, campaigns: [] };
+          }
+        })
+      );
+      const loaded = results.flatMap((result) => result.campaigns);
+      const failedFactories = results.filter((result) => !result.ok).length;
 
       const deduped = Array.from(
         new Map(loaded.map((campaign) => [campaign.address.toLowerCase(), campaign])).values()
       );
       setCampaigns(deduped);
+      if (failedFactories === results.length) {
+        setError("Could not read any configured factory. Check VITE_FACTORY_ADDRESSES and the Sepolia RPC.");
+      }
     } catch (err) {
       console.error(err);
       setError("Could not load campaigns. Check the Sepolia RPC URL.");

@@ -41,6 +41,9 @@ contract ClearFundFactory {
 
         uint256 totalPercent = 0;
         for (uint256 i = 0; i < _milestones.length; i++) {
+            require(bytes(_milestones[i].title).length > 0, "Factory: milestone title required");
+            require(bytes(_milestones[i].description).length > 0, "Factory: milestone description required");
+            require(_milestones[i].fundPercent > 0, "Factory: milestone percent required");
             totalPercent += _milestones[i].fundPercent;
         }
         require(totalPercent == 100, "Factory: milestone percentages must sum to 100");
@@ -73,6 +76,7 @@ contract ClearFundFactory {
             uint256 actualPercent = i == _milestones.length - 1
                 ? remainingPercent - assignedPercent
                 : (_milestones[i].fundPercent * remainingPercent) / 100;
+            require(actualPercent > 0, "Factory: milestone percent too small");
 
             assignedPercent += actualPercent;
             campaign.addMilestone(

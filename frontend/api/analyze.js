@@ -21,6 +21,7 @@ const FACTORY_ADDRESSES = uniqueAddresses([
 const FACTORY_ABI = ["function getAllCampaigns() view returns (address[])"];
 
 const CAMPAIGN_ABI = [
+  "function ngoAddress() view returns (address)",
   "function oracleReviewMilestone(uint256,bool,string) external",
   "function oracleApproveMilestone(uint256) external",
   "function getAIReview(uint256) view returns (tuple(bool exists, bool approved, string summary, uint256 reviewedAt))",
@@ -203,6 +204,37 @@ function validateProofUrl(evidenceUrl) {
   }
 
   return "";
+}
+
+function imageHash(imageB64) {
+  return ethers.id(imageB64);
+}
+
+function oracleAuthMessage({ action, campaignAddress, milestoneId, evidenceUrl = "", locationStr = "", capturedAt = 0, imageHash = "" }) {
+  return [
+    "ClearFund oracle request",
+    `Action: ${action}`,
+    `Campaign: ${campaignAddress}`,
+    `Milestone: ${milestoneId}`,
+    `Evidence: ${evidenceUrl}`,
+    `Location: ${locationStr}`,
+    `Captured: ${capturedAt}`,
+    `ImageHash: ${imageHash}`,
+  ].join("\n");
+}
+
+async function validateNgoSignature(contract, payload, signature) {
+  if (typeof signature !== "string" || !signature) {
+    return "NGO wallet signature is required.";
+  }
+
+  try {
+    const ngo = String(await contract.ngoAddress()).toLowerCase();
+    const signer = ethers.verifyMessage(oracleAuthMessage(payload), signature).toLowerCase();
+    return signer === ngo ? "" : "Only the campaign NGO can submit proof to the oracle.";
+  } catch {
+    return "NGO wallet signature is invalid.";
+  }
 }
 
 function validateStoredProof(record, evidenceUrl) {
@@ -467,7 +499,7 @@ export default async function handler(req, res) {
     }
 
     const body = req.body || {};
-    const { action = "review", campaignAddress, milestoneId, imageB64, locationStr, capturedAt, evidenceUrl } = body;
+    const { action = "review", campaignAddress, milestoneId, imageB64, locationStr, capturedAt, evidenceUrl, signature } = body;
     const configError = assertServerConfig();
     if (configError) return res.status(500).json({ error: configError });
 
@@ -478,10 +510,20 @@ export default async function handler(req, res) {
     if (!(await isRegisteredCampaign(provider, campaignAddress))) {
       return res.status(403).json({ error: "Campaign is not registered." });
     }
+    const readContract = new ethers.Contract(campaignAddress, CAMPAIGN_ABI, provider);
 
     if (action === "upload") {
       const evidenceError = validateEvidence({ campaignAddress, milestoneId, imageB64, locationStr, capturedAt });
       if (evidenceError) return res.status(400).json({ error: evidenceError });
+      const authError = await validateNgoSignature(readContract, {
+        action,
+        campaignAddress,
+        milestoneId,
+        locationStr,
+        capturedAt,
+        imageHash: imageHash(imageB64),
+      }, signature);
+      if (authError) return res.status(403).json({ error: authError });
 
       const url = await saveProof({ campaignAddress, milestoneId, imageB64, capturedAt });
       const recordUrl = await saveReview({
@@ -504,6 +546,13 @@ export default async function handler(req, res) {
 
     const proofUrlError = validateProofUrl(evidenceUrl);
     if (proofUrlError) return res.status(400).json({ error: proofUrlError });
+    const authError = await validateNgoSignature(readContract, {
+      action,
+      campaignAddress,
+      milestoneId,
+      evidenceUrl,
+    }, signature);
+    if (authError) return res.status(403).json({ error: authError });
 
     const proofRecord = await loadReview(campaignAddress, milestoneId);
     const storedProofError = validateStoredProof(proofRecord, evidenceUrl);

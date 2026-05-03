@@ -114,7 +114,7 @@ export default function Home({ wallet }: { wallet: WalletState }) {
         ) : error ? (
           <div className="empty-state">
             <p className="font-bold text-2xl text-secondary">{error}</p>
-            <p className="mt-2">The default public Sepolia RPC is set in frontend/blockchain.ts.</p>
+            <p className="mt-2">Check the Vercel environment variables and redeploy after changes.</p>
           </div>
         ) : campaigns.length === 0 ? (
           <div className="empty-state">
