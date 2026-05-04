@@ -22,6 +22,7 @@ function addressSet(value: string) {
 
 const BLOCKED_FACTORY_ADDRESSES = addressSet(envValue("VITE_BLOCKED_FACTORY_ADDRESSES"));
 const SUPERSEDED_FACTORY_ADDRESSES = addressSet(envValue("VITE_SUPERSEDED_FACTORY_ADDRESSES"));
+const ACTIVE_FACTORY_ADDRESS = envValue("VITE_ACTIVE_FACTORY_ADDRESS") || envValue("VITE_FACTORY_ADDRESS");
 
 function factoryForCreation(address: string) {
   const trimmed = address.trim();
@@ -35,7 +36,7 @@ function factoryForCreation(address: string) {
   return trimmed;
 }
 
-export const FACTORY_ADDRESS = factoryForCreation(envValue("VITE_FACTORY_ADDRESS"));
+export const FACTORY_ADDRESS = factoryForCreation(ACTIVE_FACTORY_ADDRESS);
 
 function uniqueAddresses(addresses: string[]) {
   const seen = new Set<string>();
@@ -54,6 +55,7 @@ function uniqueAddresses(addresses: string[]) {
 
 export const FACTORY_ADDRESSES = uniqueAddresses([
   FACTORY_ADDRESS,
+  ...splitAddresses(envValue("VITE_FACTORY_ADDRESS_HISTORY")),
   ...splitAddresses(envValue("VITE_FACTORY_ADDRESSES")),
 ]);
 
@@ -289,6 +291,7 @@ export function humanError(err: unknown, fallback = "Something went wrong. Pleas
 
   const friendlyContracts: Array<[RegExp, string]> = [
     [/Campaign: NGO cannot donate/i, "The NGO wallet cannot donate to its own campaign."],
+    [/Campaign: overfunding not allowed/i, "This donation would exceed the campaign goal. Donate only the remaining amount."],
     [/Campaign: deadline passed/i, "This deadline has already passed."],
     [/Campaign: invalid status/i, "This action is not available for the campaign right now."],
     [/Campaign: caller is not the NGO/i, "Only the NGO wallet can do this."],

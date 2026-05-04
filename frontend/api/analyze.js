@@ -11,10 +11,17 @@ const SUPERSEDED_FACTORY_ADDRESSES = addressSet(
   envValue("SUPERSEDED_FACTORY_ADDRESSES") || envValue("VITE_SUPERSEDED_FACTORY_ADDRESSES")
 );
 const FACTORY_ADDRESS = factoryForOracle(
-  envValue("FACTORY_ADDRESS") || envValue("VITE_FACTORY_ADDRESS")
+  envValue("FACTORY_ACTIVE_ADDRESS") ||
+  envValue("VITE_ACTIVE_FACTORY_ADDRESS") ||
+  envValue("FACTORY_ADDRESS") ||
+  envValue("VITE_FACTORY_ADDRESS")
 );
 const FACTORY_ADDRESSES = uniqueAddresses([
   FACTORY_ADDRESS,
+  ...splitAddresses(
+    envValue("FACTORY_ADDRESS_HISTORY") ||
+    envValue("VITE_FACTORY_ADDRESS_HISTORY")
+  ),
   ...splitAddresses(envValue("FACTORY_ADDRESSES") || envValue("VITE_FACTORY_ADDRESSES")),
 ]);
 
@@ -479,11 +486,16 @@ function assertServerConfig() {
   return "";
 }
 
+function requestUrl(req) {
+  return new URL(req.url || "/", `https://${req.headers.host || "clearfundapp.vercel.app"}`);
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
-      const campaignAddress = String(req.query.campaignAddress || "");
-      const milestoneId = Number(req.query.milestoneId);
+      const params = requestUrl(req).searchParams;
+      const campaignAddress = String(params.get("campaignAddress") || "");
+      const milestoneId = Number(params.get("milestoneId"));
 
       if (!ethers.isAddress(campaignAddress) || !Number.isInteger(milestoneId)) {
         return res.status(400).json({ error: "Invalid review lookup." });

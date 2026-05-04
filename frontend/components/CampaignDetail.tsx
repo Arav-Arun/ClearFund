@@ -52,6 +52,14 @@ function hasAiAnalysis(review: OracleResult | undefined) {
   return !!reviewSummary(review?.summary) && (review?.decision === "APPROVE" || review?.decision === "REJECT");
 }
 
+function voteTallyText(vetoVotes: number, donorCount: number) {
+  return `${vetoVotes}/${donorCount || "?"}`;
+}
+
+function hasDonorMajorityVeto(vetoVotes: number, donorCount: number) {
+  return donorCount > 0 && vetoVotes > donorCount / 2;
+}
+
 function mapLocation(value: string | undefined) {
   const [lat, lng] = String(value || "").split(",").map(Number);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -188,6 +196,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const isNgo = wallet.account?.toLowerCase() === campaign.ngoAddress.toLowerCase();
   const isDonor = (campaign.userDonation || 0n) > 0n;
   const bootstrapTarget = (campaign.goalAmount * BigInt(campaign.bootstrapPercent)) / 100n;
+  const remainingFunding = campaign.raisedAmount >= campaign.goalAmount ? 0n : campaign.goalAmount - campaign.raisedAmount;
+  const isFullyFunded = remainingFunding === 0n;
   const canStartCampaign = campaign.raisedAmount >= bootstrapTarget;
   const now = Math.floor(Date.now() / 1000);
   const nextMilestone = milestones.find((milestone) => milestone.id > 0 && milestone.status !== 3);
@@ -208,6 +218,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         return;
       }
       if (amount <= 0n) return toast.error("Enter an ETH amount greater than 0.");
+      if (remainingFunding === 0n) {
+        return toast.error("This campaign has already reached its funding goal.", { id: "donate" });
+      }
+      if (amount > remainingFunding) {
+        return toast.error(`Only ${formatEth(remainingFunding, 6)} ETH is still needed for this campaign.`, { id: "donate" });
+      }
 
       setIsDonating(true);
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
@@ -548,7 +564,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
         </div>
         <div className="flex justify-between text-muted text-sm mb-6">
           <span>{formatEth(campaign.raisedAmount)} ETH raised</span>
-          <span>{formatEth(campaign.goalAmount)} ETH soft goal</span>
+          <span>{formatEth(campaign.goalAmount)} ETH funding goal</span>
         </div>
 
         {wallet.account && (
@@ -557,15 +573,22 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           </p>
         )}
 
-        {campaign.status === 0 && (
+        {campaign.status === 0 && isFullyFunded && (
+          <div className="notice-box mb-4">
+            Funding goal reached. New donations are closed.
+          </div>
+        )}
+
+        {campaign.status === 0 && !isFullyFunded && (
           <form onSubmit={handleDonate} className="flex gap-4 mb-4" noValidate>
             <input
               type="number"
               className="neo-input flex-1"
               step="any"
               min="0.000001"
+              max={ethers.formatEther(remainingFunding)}
               required
-              placeholder="Amount in ETH (Overfunding allowed)"
+              placeholder={`Amount in ETH (max ${formatEth(remainingFunding, 6)})`}
               value={donateAmount}
               onChange={(e) => setDonateAmount(e.target.value)}
             />
@@ -613,25 +636,30 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                 chainUpdated: true,
               }
             : undefined;
-          const review = offchainReview || chainReview;
+          const offchainReviewMatchesChain = !!offchainReview
+            && milestone.status > 0
+            && (!milestone.evidenceUrl || offchainReview.evidenceUrl === milestone.evidenceUrl);
+          const proofRecord = offchainReviewMatchesChain ? offchainReview : undefined;
+          const review = hasAiAnalysis(proofRecord) ? proofRecord : chainReview || proofRecord;
           const canSubmitProof = isNgo && milestone.id > 0 && (milestone.status === 0 || milestone.status === 4);
           const onchainProofUrl = isPublicProofUrl(milestone.evidenceUrl) ? milestone.evidenceUrl : "";
-          const storedProofMatchesChain = milestone.status > 0
-            && isPublicProofUrl(offchainReview?.evidenceUrl)
-            && (!milestone.evidenceUrl || offchainReview?.evidenceUrl === milestone.evidenceUrl);
-          const storedProofUrl = storedProofMatchesChain ? offchainReview?.evidenceUrl || "" : "";
+          const storedProofMatchesChain = isPublicProofUrl(proofRecord?.evidenceUrl);
+          const storedProofUrl = storedProofMatchesChain ? proofRecord?.evidenceUrl || "" : "";
           const proofUrl = onchainProofUrl || storedProofUrl;
           const proofMissing = milestone.id > 0 && milestone.status > 0 && !proofUrl;
           const legacySubmittedWithoutProof = milestone.status === 1 && proofMissing;
           const aiReady = hasAiAnalysis(review);
           const summary = reviewSummary(review?.summary);
           const reviewColor = aiReady ? (review?.approved ? "var(--success)" : "var(--danger)") : "var(--warning)";
-          const location = mapLocation(review?.locationStr);
-          const capturedTime = formatTime(review?.capturedAt, "ms");
+          const location = mapLocation(proofRecord?.locationStr || review?.locationStr);
+          const capturedTime = formatTime(proofRecord?.capturedAt || review?.capturedAt, "ms");
           const reviewedTime = formatTime(review?.reviewedAt, "s");
-          const publicReviewUrl = offchainReview && address
+          const publicReviewUrl = proofRecord && address
             ? `/api/analyze?campaignAddress=${address}&milestoneId=${milestone.id}`
             : "";
+          const reviewWarning = proofRecord?.warning;
+          const vetoTally = voteTallyText(milestone.vetoVotes, milestone.donorCount);
+          const donorMajorityVeto = hasDonorMajorityVeto(milestone.vetoVotes, milestone.donorCount);
 
           return (
             <div key={milestone.id} className="neo-card milestone-card">
@@ -754,8 +782,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                   {summary && (
                     <p className="text-xs text-secondary whitespace-pre-line">{summary}</p>
                   )}
-                  {review?.warning && (
-                    <p className="text-xs text-secondary mt-2">{review.warning}</p>
+                  {reviewWarning && (
+                    <p className="text-xs text-secondary mt-2">{reviewWarning}</p>
                   )}
                   {proofUrl && !legacySubmittedWithoutProof && (
                     <p className="text-xs text-secondary mt-2">
@@ -800,7 +828,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                     </p>
                   )}
                   <p className="text-xs mb-4 text-secondary">
-                    Final outcome can be announced after {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}. Not voting accepts the AI recommendation. Veto votes recorded: {milestone.vetoVotes}/{milestone.donorCount || "?"}.
+                    Final outcome can be announced after {new Date(milestone.vetoEndsAt * 1000).toLocaleString()}. Not voting accepts the AI recommendation. Polling result so far: {vetoTally} veto votes.
                   </p>
                   {(isDonor || isNgo) && (
                     <div className="notice-box mb-4">
@@ -840,18 +868,45 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                 </div>
               )}
 
+              {milestone.status === 3 && (
+                <div className="review-box mt-4">
+                  <p className="mb-2 text-sm font-bold" style={{ color: "var(--success)" }}>
+                    Final outcome: approved and funds released.
+                  </p>
+                  {aiReady ? (
+                    <p className="text-xs mb-3 text-secondary whitespace-pre-line">{summary}</p>
+                  ) : (
+                    <p className="text-xs mb-3 text-secondary">
+                      This approved milestone does not have a public AI explanation saved in the current review storage.
+                    </p>
+                  )}
+                  {reviewWarning && (
+                    <p className="text-xs text-secondary mb-3">{reviewWarning}</p>
+                  )}
+                  <p className="text-xs text-secondary">
+                    Polling result: {vetoTally} veto votes. A strict donor majority did not block this milestone during the 24-hour review.
+                  </p>
+                </div>
+              )}
+
               {milestone.status === 4 && (
                 <div className="review-box mt-4">
                   <p className="mb-2 text-sm font-bold" style={{ color: 'var(--danger)' }}>
-                    Final outcome: rejected.
+                    Final outcome: rejected by {donorMajorityVeto ? "donor majority veto" : aiReady && review?.approved === false ? "AI recommendation" : "the review process"}.
                   </p>
                   {summary ? (
-                    <p className="text-xs text-secondary whitespace-pre-line">{summary}</p>
+                    <p className="text-xs mb-3 text-secondary whitespace-pre-line">{summary}</p>
                   ) : (
-                    <p className="text-xs text-secondary">
+                    <p className="text-xs mb-3 text-secondary">
                       This older campaign was rejected by a legacy oracle contract that did not save the AI explanation or wait through the new 24-hour rejection review. The NGO can submit fresh live evidence before the deadline.
                     </p>
                   )}
+                  {reviewWarning && (
+                    <p className="text-xs text-secondary mb-3">{reviewWarning}</p>
+                  )}
+                  <p className="text-xs text-secondary">
+                    Polling result: {vetoTally} veto votes{donorMajorityVeto ? ", a strict donor majority." : "."}
+                  </p>
                 </div>
               )}
             </div>

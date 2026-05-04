@@ -171,7 +171,7 @@ contract ClearFundCampaign {
         require(msg.value > 0, "Campaign: donation > 0");
         require(msg.sender != ngoAddress, "Campaign: NGO cannot donate");
         require(block.timestamp < campaignDeadline, "Campaign: deadline passed");
-        // Soft Cap: We DO NOT restrict raisedAmount <= goalAmount, allowing overfunding.
+        require(raisedAmount + msg.value <= goalAmount, "Campaign: overfunding not allowed");
 
         if (!isDonor[msg.sender]) {
             donorList.push(msg.sender);
@@ -193,7 +193,7 @@ contract ClearFundCampaign {
     }
 
     function _releaseBootstrap() internal {
-        // Calculate based on actual raised amount (handles overfunding)
+        // Calculate based on actual raised amount.
         uint256 bootstrapAmount = (raisedAmount * bootstrapPercent) / 100;
         bootstrapReleased = true;
         milestones[0].status = MilestoneStatus.Approved;

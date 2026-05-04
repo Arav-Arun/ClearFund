@@ -24,7 +24,7 @@ export default function Navbar({ wallet }: NavbarProps) {
   return (
     <nav className="navbar">
       <Link to="/" className="navbar-logo flex items-center gap-2">
-        <img src="/clearFundLogo.png" alt="ClearFund Logo" style={{ width: 24, height: 24 }} />
+        <img src="/clearFundLogo.png" alt="ClearFund Logo" className="navbar-logo-mark" />
         ClearFund
       </Link>
 
