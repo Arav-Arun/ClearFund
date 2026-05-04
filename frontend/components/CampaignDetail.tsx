@@ -48,8 +48,139 @@ function reviewSummary(summary: string | undefined) {
   return /No AI analysis was returned|AI review was inconclusive|oracle response could not be parsed/i.test(text) ? "" : text;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberField(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : 0;
+  return Number.isFinite(number) ? number : 0;
+}
+
+function booleanField(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string" && /^(true|false)$/i.test(value)) return value.toLowerCase() === "true";
+  return undefined;
+}
+
+function normalizedDecision(value: unknown) {
+  const decision = String(value || "").trim().toUpperCase();
+  return decision === "APPROVE" || decision === "REJECT" ? decision : "";
+}
+
+function summaryFromParts(observations: string, reason: string) {
+  if (!observations && !reason) return "";
+  return `Observed: ${observations || "No clear visual evidence."}\nReason: ${reason || "No reason was provided."}`;
+}
+
+function jsonReviewFromText(value: string) {
+  const text = value.trim();
+  if (!text) return null;
+
+  try {
+    const jsonText = text.match(/\{[\s\S]*\}/)?.[0] || text;
+    const parsed: unknown = JSON.parse(jsonText);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function aiContentText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value.map(aiContentText).filter(Boolean).join("\n");
+  }
+  if (!isRecord(value)) return "";
+
+  if (Array.isArray(value.choices)) {
+    return aiContentText(value.choices[0]);
+  }
+  if (isRecord(value.message)) {
+    return aiContentText(value.message);
+  }
+  if ("content" in value) return aiContentText(value.content);
+  if ("text" in value) return aiContentText(value.text);
+
+  return "";
+}
+
+function reviewPayloadDetails(payload: unknown) {
+  if (!isRecord(payload)) {
+    return { decision: "", summary: "" };
+  }
+
+  const directDecision = normalizedDecision(payload.decision);
+  const approved = booleanField(payload, "approved");
+  const directSummary = reviewSummary(stringField(payload, "summary"));
+  const directParts = summaryFromParts(stringField(payload, "observations"), stringField(payload, "reason"));
+
+  if (directSummary || directParts) {
+    return {
+      decision: directDecision || (approved === undefined ? "" : approved ? "APPROVE" : "REJECT"),
+      summary: reviewSummary(directSummary || directParts),
+    };
+  }
+
+  const nestedReview = jsonReviewFromText(
+    aiContentText(payload.aiResponse) ||
+    aiContentText(payload.response) ||
+    aiContentText(payload.rawResponse) ||
+    aiContentText(payload.message) ||
+    aiContentText(payload.content)
+  );
+
+  if (nestedReview) {
+    const nestedDecision = normalizedDecision(nestedReview.decision);
+    const nestedSummary = reviewSummary(
+      stringField(nestedReview, "summary") ||
+      summaryFromParts(stringField(nestedReview, "observations"), stringField(nestedReview, "reason"))
+    );
+
+    return {
+      decision: nestedDecision || directDecision || (approved === undefined ? "" : approved ? "APPROVE" : "REJECT"),
+      summary: nestedSummary,
+    };
+  }
+
+  return {
+    decision: directDecision || (approved === undefined ? "" : approved ? "APPROVE" : "REJECT"),
+    summary: "",
+  };
+}
+
+function toOracleResult(payload: unknown, fallbackEvidenceUrl = ""): OracleResult | null {
+  if (!isRecord(payload)) return null;
+
+  const { decision, summary } = reviewPayloadDetails(payload);
+  const approved = decision
+    ? decision === "APPROVE"
+    : booleanField(payload, "approved") || false;
+
+  return {
+    exists: !!(summary || decision || stringField(payload, "evidenceUrl")),
+    approved,
+    decision: decision || undefined,
+    summary,
+    reviewedAt: numberField(payload, "reviewedAt"),
+    evidenceUrl: stringField(payload, "evidenceUrl") || fallbackEvidenceUrl,
+    locationStr: stringField(payload, "locationStr"),
+    capturedAt: numberField(payload, "capturedAt"),
+    reviewUrl: stringField(payload, "reviewUrl"),
+    warning: stringField(payload, "warning"),
+    chainUpdated: booleanField(payload, "chainUpdated"),
+  };
+}
+
 function hasAiAnalysis(review: OracleResult | undefined) {
-  return !!reviewSummary(review?.summary) && (review?.decision === "APPROVE" || review?.decision === "REJECT");
+  return !!reviewSummary(review?.summary) && !!normalizedDecision(review?.decision);
 }
 
 function voteTallyText(vetoVotes: number, donorCount: number) {
@@ -151,20 +282,8 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
       reviewMilestones.map(async (milestone) => {
         const response = await fetch(`/api/analyze?campaignAddress=${address}&milestoneId=${milestone.id}`);
         if (!response.ok) return null;
-        const review = await response.json();
-        return [milestone.id, {
-          exists: true,
-          approved: !!review.approved,
-          decision: review.decision,
-          summary: review.summary,
-          reviewedAt: Number(review.reviewedAt || 0),
-          evidenceUrl: review.evidenceUrl,
-          locationStr: review.locationStr,
-          capturedAt: review.capturedAt,
-          reviewUrl: review.reviewUrl,
-          warning: review.warning,
-          chainUpdated: review.chainUpdated,
-        }] as const;
+        const review = toOracleResult(await response.json());
+        return review ? [milestone.id, review] as const : null;
       })
     ).then((rows) => {
       if (!active) return;
@@ -433,21 +552,13 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
     const result = await response.json().catch(() => ({ error: "Oracle request failed" }));
     if (!response.ok || result.error) throw new Error(result.error || "Request failed");
 
-    if (result.summary && result.decision) {
+    const review = toOracleResult({ ...result, evidenceUrl: result.evidenceUrl || evidenceUrl }, evidenceUrl);
+    if (review && hasAiAnalysis(review)) {
       setOracleResults((current) => ({
         ...current,
         [milestoneId]: {
-          exists: true,
-          approved: result.decision === "APPROVE",
-          decision: result.decision,
-          summary: result.summary,
-          reviewedAt: Number(result.reviewedAt || Math.floor(Date.now() / 1000)),
-          evidenceUrl: result.evidenceUrl || evidenceUrl,
-          locationStr: result.locationStr,
-          capturedAt: Number(result.capturedAt || 0),
-          reviewUrl: result.reviewUrl,
-          warning: result.warning,
-          chainUpdated: result.chainUpdated,
+          ...review,
+          reviewedAt: review.reviewedAt || Math.floor(Date.now() / 1000),
         },
       }));
     }
