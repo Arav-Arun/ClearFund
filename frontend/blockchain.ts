@@ -7,6 +7,8 @@ import { sepolia } from "wagmi/chains";
 
 const env = import.meta.env;
 const RPC_OPTIONS = { batchMaxCount: 1 };
+const DEFAULT_ACTIVITY_LOOKBACK_BLOCKS = 250_000;
+const ACTIVITY_LOG_CHUNK_SIZE = 10_000;
 
 function envValue(key: string) {
   return String(env[key] || "").trim();
@@ -143,6 +145,7 @@ export const CAMPAIGN_ABI = [
   "function getVetoInfo(uint256,address) view returns (uint256 donorCount,uint256 currentVetoVotes,bool voterHasVetoed,uint256 vetoEndsAt)",
   "function donations(address) view returns (uint256)",
   "event DonationReceived(address indexed, uint256)",
+  "event BootstrapReleased(uint256)",
   "event CampaignStarted()",
   "event MilestoneSubmitted(uint256 indexed, string)",
   "event OracleDecision(uint256 indexed, bool)",
@@ -151,8 +154,17 @@ export const CAMPAIGN_ABI = [
   "event VetoCast(address indexed, uint256 indexed)",
   "event VetoMajorityReached(uint256 indexed, uint256, uint256)",
   "event FundsReleased(uint256 indexed, uint256)",
+  "event MilestoneRejected(uint256 indexed, string)",
   "event CampaignCancelled()",
+  "event RefundIssued(address indexed, uint256)",
 ] as const;
+
+const CAMPAIGN_INTERFACE = new ethers.Interface(CAMPAIGN_ABI);
+const FACTORY_INTERFACE = new ethers.Interface(FACTORY_ABI);
+const FACTORY_CREATED_TOPICS = [
+  ethers.id("CampaignCreated(address,address)"),
+  ethers.id("CampaignCreated(address,address,string)"),
+];
 
 export interface CampaignInfo {
   address: string;
@@ -191,6 +203,15 @@ export interface AIReviewInfo {
   approved: boolean;
   summary: string;
   reviewedAt: number;
+}
+
+export interface ActivityItem {
+  id: string;
+  text: string;
+  timestamp: number;
+  blockNumber: number;
+  transactionHash: string;
+  verificationUrl: string;
 }
 
 export interface WalletState {
@@ -419,6 +440,194 @@ function toCampaignInfo(address: string, factoryAddress: string, info: CampaignR
   };
 }
 
+function shortAddress(address: string) {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function milestoneLabel(milestoneId: number, milestones: MilestoneInfo[]) {
+  const milestone = milestones.find((item) => item.id === milestoneId);
+  return milestone ? `milestone ${milestoneId} (${milestone.title})` : `milestone ${milestoneId}`;
+}
+
+function explorerTransactionUrl(transactionHash: string) {
+  const baseUrl = (BLOCK_EXPLORER_URL || "https://sepolia.etherscan.io").replace(/\/$/, "");
+  return `${baseUrl}/tx/${transactionHash}`;
+}
+
+function activityLookbackBlocks() {
+  const value = Number(envValue("VITE_ACTIVITY_LOOKBACK_BLOCKS"));
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_ACTIVITY_LOOKBACK_BLOCKS;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T) {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => window.setTimeout(() => resolve(fallback), timeoutMs)),
+  ]);
+}
+
+async function getLogsInChunks(
+  provider: ethers.AbstractProvider,
+  filter: Pick<ethers.Filter, "address" | "topics">,
+  fromBlock: number,
+  toBlock: number
+) {
+  const chunks: Array<[number, number]> = [];
+
+  for (let start = fromBlock; start <= toBlock; start += ACTIVITY_LOG_CHUNK_SIZE) {
+    const end = Math.min(start + ACTIVITY_LOG_CHUNK_SIZE - 1, toBlock);
+    chunks.push([start, end]);
+  }
+
+  const rows = await Promise.allSettled(
+    chunks.map(([start, end]) =>
+      withTimeout(
+        provider.getLogs({
+          ...filter,
+          fromBlock: start,
+          toBlock: end,
+        }),
+        8_000,
+        [] as ethers.Log[]
+      )
+    )
+  );
+
+  return rows.flatMap((row) => row.status === "fulfilled" ? row.value : []);
+}
+
+async function getCampaignLogs(
+  provider: ethers.AbstractProvider,
+  campaignAddress: string,
+  fromBlock: number,
+  toBlock: number
+) {
+  return getLogsInChunks(provider, { address: campaignAddress }, fromBlock, toBlock);
+}
+
+async function getCampaignCreationLogs(
+  provider: ethers.AbstractProvider,
+  campaignAddress: string,
+  fromBlock: number,
+  toBlock: number
+) {
+  const campaignTopic = ethers.zeroPadValue(campaignAddress, 32);
+  const factoryAddresses = FACTORY_ADDRESSES.length ? FACTORY_ADDRESSES : [FACTORY_ADDRESS].filter(Boolean);
+  const rows = await Promise.allSettled(
+    factoryAddresses.map((factoryAddress) =>
+      getLogsInChunks(
+        provider,
+        { address: factoryAddress, topics: [FACTORY_CREATED_TOPICS, campaignTopic] },
+        fromBlock,
+        toBlock
+      )
+    )
+  );
+
+  return rows.flatMap((row) => row.status === "fulfilled" ? row.value : []);
+}
+
+function activityText(name: string, args: ethers.Result, milestones: MilestoneInfo[]) {
+  switch (name) {
+    case "DonationReceived":
+      return `Donor ${shortAddress(String(args[0]))} donated ${formatEth(args[1] as bigint, 6)} ETH.`;
+    case "CampaignStarted":
+      return "NGO started the campaign.";
+    case "BootstrapReleased":
+      return `Bootstrap funds released to the NGO: ${formatEth(args[0] as bigint, 6)} ETH.`;
+    case "MilestoneSubmitted": {
+      const milestoneId = Number(args[0]);
+      return `NGO submitted public proof for ${milestoneLabel(milestoneId, milestones)}.`;
+    }
+    case "OracleDecision": {
+      const milestoneId = Number(args[0]);
+      return `AI oracle decision recorded for ${milestoneLabel(milestoneId, milestones)}: ${args[1] ? "approve" : "reject"}.`;
+    }
+    case "OracleReview": {
+      const milestoneId = Number(args[0]);
+      return `AI oracle reviewed ${milestoneLabel(milestoneId, milestones)} and recommended ${args[1] ? "approval" : "rejection"}.`;
+    }
+    case "VetoWindowOpened": {
+      const milestoneId = Number(args[0]);
+      const donorCount = Number(args[3]);
+      return `24-hour donor review opened for ${milestoneLabel(milestoneId, milestones)} with ${donorCount} donor${donorCount === 1 ? "" : "s"} eligible.`;
+    }
+    case "VetoCast": {
+      const milestoneId = Number(args[1]);
+      return `Donor ${shortAddress(String(args[0]))} voted no on ${milestoneLabel(milestoneId, milestones)}.`;
+    }
+    case "VetoMajorityReached": {
+      const milestoneId = Number(args[0]);
+      return `Donor majority veto reached for ${milestoneLabel(milestoneId, milestones)}: ${Number(args[1])}/${Number(args[2])} no votes.`;
+    }
+    case "FundsReleased": {
+      const milestoneId = Number(args[0]);
+      return `Funds released for ${milestoneLabel(milestoneId, milestones)}: ${formatEth(args[1] as bigint, 6)} ETH.`;
+    }
+    case "MilestoneRejected": {
+      const milestoneId = Number(args[0]);
+      return `${milestoneLabel(milestoneId, milestones)} was rejected: ${String(args[1] || "review failed")}.`;
+    }
+    case "CampaignCancelled":
+      return "Campaign cancelled; remaining escrow can be refunded to eligible donors.";
+    case "RefundIssued":
+      return `Refund issued to donor ${shortAddress(String(args[0]))}: ${formatEth(args[1] as bigint, 6)} ETH.`;
+    default:
+      return `${name} recorded on-chain.`;
+  }
+}
+
+async function readActivityTrail(
+  provider: ethers.AbstractProvider,
+  campaignAddress: string,
+  milestones: MilestoneInfo[]
+) {
+  const latestBlock = await provider.getBlockNumber();
+  const fromBlock = Math.max(0, latestBlock - activityLookbackBlocks());
+  const [campaignLogs, creationLogs] = await Promise.all([
+    getCampaignLogs(provider, campaignAddress, fromBlock, latestBlock),
+    withTimeout(getCampaignCreationLogs(provider, campaignAddress, fromBlock, latestBlock), 8_000, [] as ethers.Log[]),
+  ]);
+  const parsedCampaignLogs = campaignLogs.flatMap((log) => {
+    try {
+      const parsed = CAMPAIGN_INTERFACE.parseLog(log);
+      return parsed ? [{ log, parsed, text: activityText(parsed.name, parsed.args, milestones) }] : [];
+    } catch {
+      return [];
+    }
+  });
+  const parsedCreationLogs = creationLogs.flatMap((log) => {
+    try {
+      const parsed = FACTORY_INTERFACE.parseLog(log);
+      const ngoAddress = parsed?.args?.[1] ? shortAddress(String(parsed.args[1])) : "the NGO";
+      return parsed ? [{ log, parsed, text: `Campaign created by ${ngoAddress}.` }] : [];
+    } catch {
+      return [];
+    }
+  });
+  const parsedLogs = [...parsedCreationLogs, ...parsedCampaignLogs];
+  const blockNumbers = Array.from(new Set(parsedLogs.map(({ log }) => log.blockNumber)));
+  const blocks = new Map(
+    await Promise.all(
+      blockNumbers.map(async (blockNumber) => {
+        const block = await provider.getBlock(blockNumber);
+        return [blockNumber, block?.timestamp || 0] as const;
+      })
+    )
+  );
+
+  return parsedLogs
+    .sort((a, b) => a.log.blockNumber - b.log.blockNumber || a.log.index - b.log.index)
+    .map(({ log, text }) => ({
+      id: `${log.transactionHash}-${log.index}`,
+      text,
+      timestamp: blocks.get(log.blockNumber) || 0,
+      blockNumber: log.blockNumber,
+      transactionHash: log.transactionHash,
+      verificationUrl: explorerTransactionUrl(log.transactionHash),
+    }));
+}
+
 async function readCampaign(
   provider: ethers.AbstractProvider,
   factoryAddress: string,
@@ -504,12 +713,16 @@ export function useCampaign(
 ) {
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null);
   const [milestones, setMilestones] = useState<MilestoneInfo[]>([]);
+  const [activityTrail, setActivityTrail] = useState<ActivityItem[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const fetchCampaign = useCallback(async () => {
     if (!provider || !address) {
       setCampaign(null);
       setMilestones([]);
+      setActivityTrail([]);
+      setActivityLoading(false);
       setLoading(false);
       return;
     }
@@ -524,9 +737,8 @@ export function useCampaign(
       setCampaign(info);
 
       const rows = await contract.getAllMilestones();
-      setMilestones(
-        await Promise.all(
-          rows.map(async (milestone: MilestoneRow, id: number) => {
+      const loadedMilestones = await Promise.all(
+        rows.map(async (milestone: MilestoneRow, id: number) => {
             let vetoInfo: VetoRow = {
               donorCount: 0n,
               currentVetoVotes: 0n,
@@ -568,12 +780,23 @@ export function useCampaign(
               aiReview,
             };
           })
-        )
       );
+      setMilestones(loadedMilestones);
+
+      setActivityLoading(true);
+      readActivityTrail(provider, address, loadedMilestones)
+        .then(setActivityTrail)
+        .catch((err) => {
+          console.error("Could not load activity trail:", err);
+          setActivityTrail([]);
+        })
+        .finally(() => setActivityLoading(false));
     } catch (err) {
       console.error(err);
       setCampaign(null);
       setMilestones([]);
+      setActivityTrail([]);
+      setActivityLoading(false);
     } finally {
       setLoading(false);
     }
@@ -583,5 +806,5 @@ export function useCampaign(
     fetchCampaign();
   }, [fetchCampaign]);
 
-  return { campaign, milestones, loading, refetch: fetchCampaign };
+  return { campaign, milestones, activityTrail, activityLoading, loading, refetch: fetchCampaign };
 }

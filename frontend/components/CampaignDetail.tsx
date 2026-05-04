@@ -9,7 +9,7 @@ import {
   humanError,
   useCampaign,
 } from "../blockchain";
-import type { AIReviewInfo, WalletState } from "../blockchain";
+import type { ActivityItem, AIReviewInfo, WalletState } from "../blockchain";
 import { toast } from "react-hot-toast";
 
 type OracleResult = AIReviewInfo & {
@@ -208,6 +208,14 @@ function formatTime(value: number | undefined, unit: "ms" | "s") {
   return new Date(unit === "s" ? value * 1000 : value).toLocaleString();
 }
 
+function activityDateTime(item: ActivityItem) {
+  return item.timestamp ? new Date(item.timestamp * 1000).toLocaleString() : `Block ${item.blockNumber}`;
+}
+
+function shortHash(hash: string) {
+  return `${hash.slice(0, 10)}...${hash.slice(-8)}`;
+}
+
 function oracleAuthMessage({
   action,
   campaignAddress,
@@ -239,7 +247,7 @@ function oracleAuthMessage({
 
 export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
   const { address } = useParams<{ address: string }>();
-  const { campaign, milestones, loading, refetch } = useCampaign(wallet.provider, address, wallet.account);
+  const { campaign, milestones, activityTrail, activityLoading, loading, refetch } = useCampaign(wallet.provider, address, wallet.account);
   
   const [donateAmount, setDonateAmount] = useState("");
   const [isDonating, setIsDonating] = useState(false);
@@ -1023,6 +1031,29 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
             </div>
           );
         })}
+      </div>
+
+      <h2 className="section-title mt-8">ACTIVITY TRAIL</h2>
+      <div className="neo-card">
+        {activityLoading && activityTrail.length === 0 ? (
+          <p className="text-secondary text-sm">Loading on-chain activity...</p>
+        ) : activityTrail.length === 0 ? (
+          <p className="text-secondary text-sm">No on-chain activity found yet.</p>
+        ) : (
+          <div className="activity-list">
+            {activityTrail.map((item) => (
+              <div className="activity-item" key={item.id}>
+                <p className="activity-text">{item.text}</p>
+                <div className="activity-meta">
+                  <span>{activityDateTime(item)}</span>
+                  <a href={item.verificationUrl} target="_blank" rel="noreferrer">
+                    Etherscan verification: {shortHash(item.transactionHash)}
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
