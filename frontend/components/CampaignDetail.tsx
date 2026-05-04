@@ -622,6 +622,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
           const storedProofUrl = storedProofMatchesChain ? offchainReview?.evidenceUrl || "" : "";
           const proofUrl = onchainProofUrl || storedProofUrl;
           const proofMissing = milestone.id > 0 && milestone.status > 0 && !proofUrl;
+          const legacySubmittedWithoutProof = milestone.status === 1 && proofMissing;
           const aiReady = hasAiAnalysis(review);
           const summary = reviewSummary(review?.summary);
           const reviewColor = aiReady ? (review?.approved ? "var(--success)" : "var(--danger)") : "var(--warning)";
@@ -693,7 +694,7 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
 
               {proofMissing && (
                 <div className="notice-box mb-4">
-                  This older submission did not store a public proof image. The NGO must capture fresh live evidence so voters can inspect the photo.
+                  This older submission did not store a public proof URL, so ClearFund cannot show the photo, GPS data, or AI review for this exact proof. New submissions from the latest flow require live camera, live GPS, public proof storage, AI analysis, and a 24-hour donor review.
                 </div>
               )}
 
@@ -744,7 +745,9 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
               {milestone.status === 1 && (
                 <div className="review-box mt-4">
                   <p className="mb-2 text-sm font-bold" style={{ color: reviewColor }}>
-                    {aiReady
+                    {legacySubmittedWithoutProof
+                      ? "Legacy submission cannot be reviewed because no public proof URL is stored on-chain."
+                      : aiReady
                       ? `AI analyzed this proof and recommends ${review?.approved ? "approval" : "rejection"}.`
                       : "Proof is submitted on-chain. AI Oracle review is pending."}
                   </p>
@@ -754,12 +757,12 @@ export default function CampaignDetail({ wallet }: { wallet: WalletState }) {
                   {review?.warning && (
                     <p className="text-xs text-secondary mt-2">{review.warning}</p>
                   )}
-                  {proofUrl && (
+                  {proofUrl && !legacySubmittedWithoutProof && (
                     <p className="text-xs text-secondary mt-2">
                       Donors can see the proof image above. Voting starts after the oracle writes the review on-chain.
                     </p>
                   )}
-                  {aiReady && (
+                  {aiReady && !legacySubmittedWithoutProof && (
                     <p className="text-xs text-secondary mt-2">
                       The vote button appears only after the smart contract status changes from Submitted to 24h Review.
                     </p>
