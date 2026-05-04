@@ -6,6 +6,7 @@ import { useAccount, useDisconnect, useSwitchChain, useWalletClient } from "wagm
 import { sepolia } from "wagmi/chains";
 
 const env = import.meta.env;
+const RPC_OPTIONS = { batchMaxCount: 1 };
 
 function envValue(key: string) {
   return String(env[key] || "").trim();
@@ -332,7 +333,7 @@ export function useWallet(): WalletState {
 
   const readonlyProvider = useMemo(() => {
     if (!READONLY_SEPOLIA_RPC) return null;
-    return new ethers.JsonRpcProvider(READONLY_SEPOLIA_RPC);
+    return new ethers.JsonRpcProvider(READONLY_SEPOLIA_RPC, undefined, RPC_OPTIONS);
   }, []);
 
   const walletProvider = useMemo(() => {

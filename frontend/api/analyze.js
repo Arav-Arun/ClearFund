@@ -34,6 +34,7 @@ const MILESTONE_STATUS = {
   APPROVED: 3,
   REJECTED: 4,
 };
+const RPC_OPTIONS = { batchMaxCount: 1 };
 
 function envValue(key) {
   return String(process.env[key] || "").trim();
@@ -506,7 +507,7 @@ export default async function handler(req, res) {
     const idError = validateIds({ campaignAddress, milestoneId });
     if (idError) return res.status(400).json({ error: idError });
 
-    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    const provider = new ethers.JsonRpcProvider(RPC_URL, undefined, RPC_OPTIONS);
     if (!(await isRegisteredCampaign(provider, campaignAddress))) {
       return res.status(403).json({ error: "Campaign is not registered." });
     }
