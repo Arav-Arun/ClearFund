@@ -265,50 +265,6 @@ BLOB_READ_WRITE_TOKEN=vercel_blob_token_for_public_proof_images
 The oracle API reuses the public `VITE_FACTORY_*` address variables so the same
 factory list does not need to be duplicated as server-only env.
 
-Never commit `.env`, private keys, API keys, deployment metadata, or generated
-build output.
-
-## Vercel Deployment
-
-Use one Vercel project with the root directory set to:
-
-```txt
-frontend
-```
-
-This is important. If Vercel builds from the repository root, it will not find
-the frontend dependencies and the build can fail with `vite: command not found`.
-
-The included `frontend/vercel.json` sets:
-
-```txt
-Framework: Vite
-Install Command: npm install
-Build Command: npm run build
-Output Directory: dist
-SPA Rewrite: all non-API paths -> /index.html
-```
-
-With the root set to `frontend`, the oracle route deploys as:
-
-```txt
-/api/analyze
-```
-
-If Vercel already has old factory variables, update `VITE_FACTORY_ADDRESS` and
-`VITE_FACTORY_ADDRESSES`. The source code intentionally has no deployment
-address fallback.
-
-## Public Repo Hygiene
-
-The public repository should stay small and explainable:
-
-- Keep only `contracts/` and `frontend/` as main folders.
-- Do not commit `node_modules`, `dist`, `.vercel`, `.env`, `.DS_Store`, or
-  generated compiler output.
-- Keep helper code inside `frontend/blockchain.ts` unless a split clearly makes
-  the code easier to understand.
-- Keep contract changes explicit because deployed contracts are immutable.
 
 ## License
 
