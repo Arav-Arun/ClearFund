@@ -91,33 +91,6 @@ flowchart TD
     Campaign -->|"cancel/refund if stalled"| Donor
 ```
 
-## Folder Structure
-
-The repo is intentionally small. There are only two main folders:
-
-```txt
-ClearFund/
-  contracts/
-    ClearFundCampaign.sol
-    ClearFundFactory.sol
-
-  frontend/
-    api/analyze.js
-    assets/
-    components/
-    blockchain.ts
-    index.css
-    index.html
-    main.tsx
-    package.json
-    tsconfig.json
-    vercel.json
-    vite.config.ts
-```
-
-No build output, test files, generated folders, private keys, or `.env` files
-belong in the public repo.
-
 ## Smart Contracts
 
 ### `ClearFundFactory.sol`
