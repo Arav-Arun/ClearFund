@@ -2,11 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Boxes, Camera, Code2, Coins, HandCoins, Hourglass, Layers, PenLine, Unlock } from "lucide-react";
 import { usd } from "./format";
-import { useCampaigns } from "./campaigns";
-import type { Campaign } from "./campaigns";
+import { STATUS_TEXT, fundedPercent, useCampaigns } from "./campaigns";
 import { gatewayUrl } from "./proof";
-
-const STATUS_TEXT = ["Raising funds", "Work in progress", "Completed", "Cancelled"];
 
 const BUILT_ON = [
   { Icon: Layers, label: "Ethereum" },
@@ -32,9 +29,9 @@ const GUARANTEES = [
   ["Escrow has no admin key.", "Campaigns cannot be upgraded or drained by an admin. The website, RPC and IPFS are hosted services; USDC transfers remain subject to its issuer’s controls."],
 ];
 
-/// How far the reader has scrolled through the pinned hero: 0 until the stage pins, 1 when it is about
-/// to scroll away. The stage is the section's first child, and how far it has slid down inside the
-/// section is exactly the pinned distance. Reduced motion shows the finished machine at once.
+// How far the reader has scrolled through the pinned hero: 0 until the stage pins, 1 when it is about
+// to scroll away. The stage is the section's first child, and how far it has slid down inside the
+// section is exactly the pinned distance. Reduced motion shows the finished machine at once.
 function useScrollProgress<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [progress, setProgress] = useState(0);
@@ -65,10 +62,6 @@ function useScrollProgress<T extends HTMLElement>() {
   }, []);
 
   return { ref, progress, still };
-}
-
-function progressOf(c: Campaign) {
-  return c.goal > 0n ? Math.min(100, Number((c.raised * 100n) / c.goal)) : 0;
 }
 
 export default function Home() {
@@ -147,7 +140,7 @@ export default function Home() {
                   <span className={`chip chip-${c.status}`}>{STATUS_TEXT[c.status]}</span>
                   <strong>{c.doc?.title || "Untitled campaign"}</strong>
                   <span className="muted">{c.doc?.organizer}{c.doc?.location ? `, ${c.doc.location}` : ""}</span>
-                  <span className="meter" aria-hidden="true"><span style={{ width: `${progressOf(c)}%` }} /></span>
+                  <span className="meter" aria-hidden="true"><span style={{ width: `${fundedPercent(c)}%` }} /></span>
                   <span className="card-money"><span className="figure">{usd(c.raised, 0)}</span> raised of {usd(c.goal, 0)}</span>
                 </span>
               </Link>
@@ -170,10 +163,9 @@ export default function Home() {
 }
 
 // The escrow drawn as a bench machine (assets/escrow.svg), played by the scroll position.
-// The figure is static isometric art; the build script names the parts that move and exports the
+// The drawing is static isometric art whose moving parts carry data-part names. escrow.json holds the
 // screen vector of one world unit along each axis, so a part moves along the rail, across it or up by
-// plain 2D translation and stays true to the drawing's own camera. It also exports the points the
-// small notes are pinned to.
+// plain 2D translation and stays true to the drawing's own camera, plus the points the notes pin to.
 
 interface Camera {
   x: [number, number];
@@ -188,10 +180,10 @@ type Vec = [number, number, number];
 
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
 const ease = (t: number) => t * t * (3 - 2 * t);
-/// Progress through one stage of the story, eased, given the overall progress 0–1.
+// Progress through one stage of the story, eased, given the overall progress 0–1.
 const stage = (p: number, from: number, to: number) => ease(clamp((p - from) / (to - from)));
 
-/// What happens, in order. Each note shows from `at` onwards and is the current one until the next.
+// What happens, in order. Each note shows from `at` onwards and is the current one until the next.
 const NOTES = [
   { at: 0.02, anchor: "vault", place: "above", text: "Donations wait in escrow" },
   { at: 0.24, anchor: "proof", place: "left", text: "Proof posted for milestone 2" },
@@ -203,7 +195,7 @@ const NOTES = [
 function pose(p: number) {
   const fall = stage(p, 0.02, 0.18); // donations drop into the vault
   const roll = stage(p, 0.2, 0.36); // the cart rolls up to the gate under review
-  const window = stage(p, 0.42, 0.7); // the review window runs
+  const review = stage(p, 0.42, 0.7); // the review window runs
   const exit = stage(p, 0.52, 0.66); // one donor's coin slides down the exit chute
   const lift = stage(p, 0.72, 0.78); // the gate opens
   const through = stage(p, 0.78, 0.9); // the cart rolls through
@@ -214,7 +206,7 @@ function pose(p: number) {
     coin: { at: [0, -9 + 27 * exit, 3 - 2 * exit] as Vec, opacity: exit > 0 && exit < 1 ? 1 : 0 },
     bar: [0, 0, 16 * lift] as Vec,
     release: { at: [0, 0, 34 * (1 - release)] as Vec, opacity: release },
-    needle: window * Math.PI * 2 * 0.98,
+    needle: review * Math.PI * 2 * 0.98,
   };
 }
 

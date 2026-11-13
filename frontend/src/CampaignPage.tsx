@@ -2,16 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ethers } from "ethers";
 import { toast } from "react-hot-toast";
-import { EXPLORER, USDC_ABI, USDC_ADDRESS, errorMessage, signPermit } from "./chain";
+import { CAMPAIGN_ABI, EXPLORER, USDC_ABI, USDC_ADDRESS, errorMessage, signPermit } from "./chain";
 import type { Wallet } from "./chain";
 import { date, dateTime, parseUsd, reviewCalendar, shortAddress, shortHash, timeLeft, usd } from "./format";
-import { assertRegisteredCampaign, BPS, Status, Step, milestoneAmount, useCampaign, useChainTime, useTx } from "./campaigns";
+import { assertRegisteredCampaign, BPS, STATUS_TEXT, Status, Step, fundedPercent, milestoneAmount, useCampaign, useChainTime, useTx } from "./campaigns";
 import type { Campaign, Ledger, Milestone, Tx, Viewer } from "./campaigns";
 import { gatewayUrl, uploadDocument, uploadFile, verifyDocument } from "./proof";
 import type { ProofDocument, Verified } from "./proof";
 import MoneyStrip, { campaignParts } from "./MoneyStrip";
 
-const STATUS_TEXT = ["Raising funds", "Work in progress", "Completed", "Cancelled"];
+// V2 lets anyone cancel a stage whose review closed more than a day ago without a release.
+const RELEASE_GRACE = 86_400;
 
 export default function CampaignPage({ wallet }: { wallet: Wallet }) {
   const { address = "" } = useParams();
@@ -24,7 +25,6 @@ export default function CampaignPage({ wallet }: { wallet: Wallet }) {
 
   const doc = campaign.doc;
   const isCreator = wallet.account?.toLowerCase() === campaign.creator.toLowerCase();
-  const progress = campaign.goal > 0n ? Math.min(100, Number((campaign.raised * 100n) / campaign.goal)) : 0;
 
   return (
     <main className="page campaign">
@@ -43,7 +43,7 @@ export default function CampaignPage({ wallet }: { wallet: Wallet }) {
             <span className="figure figure-big">{usd(campaign.raised, 0)}</span>
             <span className="muted">raised of {usd(campaign.goal, 0)}</span>
           </div>
-          <span className="meter" aria-hidden="true"><span style={{ width: `${progress}%` }} /></span>
+          <span className="meter" aria-hidden="true"><span style={{ width: `${fundedPercent(campaign)}%` }} /></span>
           {!doc && <p className="notice notice-warn">The campaign story could not be fetched from IPFS. The on-chain balances and deadlines are shown below; retrying shortly.</p>}
           {doc && !campaign.docOk && <p className="notice notice-warn">This campaign's story does not match the hash it was created with. Read it with caution.</p>}
           {doc && campaign.docOk && !campaign.coverOk && <p className="notice notice-warn">The cover photo could not be checked against its hash yet. The IPFS gateway may be slow; retrying shortly.</p>}
@@ -100,7 +100,7 @@ function MilestoneItem(props: { campaign: Campaign; milestone: Milestone; ledger
         <span className={`tag tag-${state}`}>{label}</span>
       </div>
       {plan?.plan && <p className="milestone-plan">{plan.plan}</p>}
-      <p className="hint">{Number(m.shareBps) / 100}% of the money, proof due {date(m.deadline)}</p>
+      <p className="hint">{m.shareBps / 100}% of the money, proof due {date(m.deadline)}</p>
 
       {m.proofCid && <ProofView campaign={campaign.address} index={m.index} cid={m.proofCid} hash={m.proofHash} />}
 
@@ -166,6 +166,13 @@ function MoneyPanel(props: { campaign: Campaign; viewer: Viewer; wallet: Wallet;
         }
       }
       if (permit) {
+        // A wallet can sign a permit the token still refuses, for example a smart account whose
+        // ERC-1271 check fails. Simulate it first and fall back to an approval rather than fail the gift.
+        const p = permit;
+        const escrow = new ethers.Contract(campaign.address, CAMPAIGN_ABI, wallet.signer);
+        if (!(await escrow.donateWithPermit.staticCall(value, p.deadline, p.v, p.r, p.s).then(() => true, () => false))) permit = null;
+      }
+      if (permit) {
         const p = permit;
         if (await tx.send("donate", (c) => c.donateWithPermit(value, p.deadline, p.v, p.r, p.s), `Thank you. ${usd(value)} is held in escrow.`)) setAmount("");
       } else {
@@ -183,6 +190,9 @@ function MoneyPanel(props: { campaign: Campaign; viewer: Viewer; wallet: Wallet;
   }
 
   const spentShare = Number(campaign.releasedBps) / Number(BPS);
+  // V2 also needs a day of work left before the first proof is due.
+  const workLeft = campaign.version === 2 ? 86_400 : 0;
+  const canStart = campaign.raised >= campaign.minimum && !campaign.stalled && now + workLeft <= campaign.milestones[0].deadline;
   return (
     <>
       {funding && !isCreator && remaining > 0n && (
@@ -225,7 +235,7 @@ function MoneyPanel(props: { campaign: Campaign; viewer: Viewer; wallet: Wallet;
           <h2>Organizer</h2>
           {campaign.status === Status.Funding && (
             <>
-              <button className="button button-primary" disabled={campaign.raised < campaign.minimum || campaign.stalled || !!tx.pending || now + (campaign.version === 2 ? 86400 : 0) > campaign.milestones[0].deadline} onClick={() => tx.send("start", (c) => c.start(), "Funding closed. Post proof for the first milestone when it is done.")}>
+              <button className="button button-primary" disabled={!canStart || !!tx.pending} onClick={() => tx.send("start", (c) => c.start(), "Funding closed. Post proof for the first milestone when it is done.")}>
                 {tx.pending === "start" ? "Starting…" : "Close funding and begin"}
               </button>
               <p className="hint">{campaign.raised < campaign.minimum ? `Starting needs ${usd(campaign.minimum, 0)}.` : "Donations close when you begin."}</p>
@@ -255,7 +265,7 @@ function MoneyPanel(props: { campaign: Campaign; viewer: Viewer; wallet: Wallet;
       <dl className="facts">
         <div><dt>Held in escrow</dt><dd className="figure">{usd(campaign.held)}</dd></div>
         <div><dt>Current exit policy</dt><dd>{campaign.exitOpen ? "Unspent funds can be claimed now" : campaign.status === Status.Completed ? "Completed" : `Next work deadline: ${dateTime(campaign.milestones[campaign.current]?.deadline || campaign.fundingDeadline)}`}</dd></div>
-        {campaign.version === 2 && campaign.status === Status.Active && <div><dt>Refunds open if this stage stalls</dt><dd>{dateTime(campaign.milestones[campaign.current].step === Step.InReview ? campaign.milestones[campaign.current].reviewEndsAt + 86401 : campaign.milestones[campaign.current].deadline + 1)}</dd></div>}
+        {campaign.version === 2 && campaign.status === Status.Active && <div><dt>Refunds open if this stage stalls</dt><dd>{dateTime(campaign.milestones[campaign.current].step === Step.InReview ? campaign.milestones[campaign.current].reviewEndsAt + RELEASE_GRACE + 1 : campaign.milestones[campaign.current].deadline + 1)}</dd></div>}
         <div><dt>Spent so far</dt><dd className="figure">{Math.round(spentShare * 100)}%</dd></div>
         <div><dt>Organizer</dt><dd><a href={`${EXPLORER}/address/${campaign.creator}`} target="_blank" rel="noreferrer"><code>{shortAddress(campaign.creator)}</code></a></dd></div>
         <div><dt>Escrow</dt><dd><a href={`${EXPLORER}/address/${campaign.address}`} target="_blank" rel="noreferrer"><code>{shortAddress(campaign.address)}</code></a></dd></div>
@@ -282,8 +292,8 @@ function Activity({ ledger }: { ledger: Ledger | null }) {
   );
 }
 
-/// The creator's proof upload: photos, receipts and a short note. Every file is hashed in this browser
-/// before it leaves, and those hashes are what the contract commits to.
+// The creator's proof upload: photos, receipts and a short note. Every file is hashed in this browser
+// before it leaves, and those hashes are what the contract commits to.
 function ProofForm({ campaign, index, factory, tx }: { campaign: string; index: number; factory: string; tx: Tx }) {
   const [files, setFiles] = useState<File[]>([]);
   const [note, setNote] = useState("");
@@ -326,9 +336,9 @@ function ProofForm({ campaign, index, factory, tx }: { campaign: string; index: 
   );
 }
 
-/// Shows a milestone's proof and checks it in the browser: the document must match the hash the
-/// creator committed on-chain and name this campaign and milestone, and every file must match the
-/// hash the document lists for it.
+// Shows a milestone's proof and checks it in the browser: the document must match the hash the
+// creator committed on-chain and name this campaign and milestone, and every file must match the
+// hash the document lists for it.
 function ProofView({ campaign, index, cid, hash }: { campaign: string; index: number; cid: string; hash: string }) {
   const [result, setResult] = useState<Verified<ProofDocument> | null>(null);
   const [error, setError] = useState("");
@@ -346,7 +356,6 @@ function ProofView({ campaign, index, cid, hash }: { campaign: string; index: nu
           : "The proof could not be fetched from IPFS. The gateway may be slow; try again later.");
       });
     return () => { live = false; };
-
   }, [campaign, index, cid, hash, retry]);
 
   if (error) return <div className="notice notice-warn"><p>{error}</p><button className="button" onClick={() => setRetry(n => n + 1)}>Retry proof check</button></div>;

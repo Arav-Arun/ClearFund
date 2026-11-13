@@ -2,13 +2,13 @@ import { usd } from "./format";
 import { Status, Step, milestoneAmount } from "./campaigns";
 import type { Campaign, Ledger } from "./campaigns";
 
-export type Part = { label: string; amount: bigint; weight: number; state: "planned" | "released" | "review" | "held" | "returned" };
+export type Part = { label: string; amount: bigint | null; weight: number; state: "planned" | "released" | "review" | "held" | "returned" };
 
 const STATE_TEXT = { planned: "Planned", released: "Released", review: "In review", held: "Held", returned: "Returned" };
 
-/// Where every dollar of a campaign is: released to the cause, under review, still held, or back
-/// with the donors who walked away. One segment per milestone, sized by its share. While a campaign
-/// is still raising money nothing is held for a milestone yet, so the strip shows the plan at the goal.
+// Where every dollar of a campaign is: released to the cause, under review, still held, or back
+// with the donors who walked away. One segment per milestone, sized by its share. While a campaign
+// is still raising money nothing is held for a milestone yet, so the strip shows the plan at the goal.
 export function campaignParts(campaign: Campaign, ledger: Ledger | null): Part[] {
   const title = (i: number) => campaign.doc?.milestones[i]?.title || `Milestone ${i + 1}`;
   const weightOf = (amount: bigint) => Number((amount * 10_000n) / (campaign.raised || 1n));

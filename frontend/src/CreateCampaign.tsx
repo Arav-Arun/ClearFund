@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ethers } from "ethers";
 import { toast } from "react-hot-toast";
-import { FACTORY_ABI, FACTORY_ADDRESS, V2_FACTORY_ADDRESS, readProvider, errorMessage } from "./chain";
+import { FACTORY_ABI, V2_FACTORY_ADDRESS, readProvider, errorMessage } from "./chain";
 import type { Wallet } from "./chain";
 import { endOfDay, parseUsd } from "./format";
 import { uploadDocument, uploadFile } from "./proof";
@@ -24,7 +24,8 @@ export default function CreateCampaign({ wallet }: { wallet: Wallet }) {
   const [drafts, setDrafts] = useState<Draft[]>([blank(), blank(), blank()]);
   const [sending, setSending] = useState(false);
   const busy = useRef(false);
-  // "checking" must not flash a warning, and a failed RPC read is not the same as a missing factory.
+  // New campaigns always go to the V2 factory. "checking" must not flash a warning, and a failed
+  // RPC read is not the same as a missing factory.
   const [factory, setFactory] = useState<"checking" | "ready" | "missing" | "unreachable">(V2_FACTORY_ADDRESS ? "checking" : "missing");
   const [attempt, setAttempt] = useState(0);
   const ready = factory === "ready";
@@ -59,7 +60,7 @@ export default function CreateCampaign({ wallet }: { wallet: Wallet }) {
     setSending(true);
     const id = toast.loading("Sign to authorize your story and cover uploads…");
     try {
-      const context = { signer: wallet.signer, factory: FACTORY_ADDRESS, purpose: "campaign" as const };
+      const context = { signer: wallet.signer, factory: V2_FACTORY_ADDRESS, purpose: "campaign" as const };
       const coverRef = await uploadFile(cover!, context);
       const { cid, hash } = await uploadDocument({
         kind: "clearfund/campaign",
@@ -72,14 +73,14 @@ export default function CreateCampaign({ wallet }: { wallet: Wallet }) {
       }, context);
 
       toast.loading("Confirm in your wallet…", { id });
-      const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, wallet.signer);
-      const tx = await factory.createCampaign(
+      const registry = new ethers.Contract(V2_FACTORY_ADDRESS, FACTORY_ABI, wallet.signer);
+      const tx = await registry.createCampaign(
         { metadataCid: cid, metadataHash: hash, goal: goalAmount, minimum: parseUsd(minimum), fundingDeadline: endOfDay(deadline) },
         drafts.map((d) => ({ shareBps: shareBps(d.share), deadline: endOfDay(d.due) }))
       );
       toast.loading("Waiting for Sepolia…", { id });
       const receipt = await tx.wait();
-      const created = receipt.logs.map((log: ethers.Log) => factory.interface.parseLog(log)).find((p: ethers.LogDescription | null) => p?.name === "CampaignCreated");
+      const created = receipt.logs.map((log: ethers.Log) => registry.interface.parseLog(log)).find((p: ethers.LogDescription | null) => p?.name === "CampaignCreated");
       toast.success("Your campaign is live", { id });
       navigate(created ? `/campaign/${created.args.campaign}` : "/");
     } catch (err) {
@@ -157,26 +158,26 @@ export default function CreateCampaign({ wallet }: { wallet: Wallet }) {
   );
 }
 
-export interface Draft {
+interface Draft {
   title: string;
   plan: string;
   share: string;
   due: string;
 }
 
-/// Percentages must be positive, finite, and exactly representable in basis points.
-export function shareBps(value: string): number {
+// Percentages must be positive, finite, and exactly representable in basis points.
+function shareBps(value: string): number {
   const text = value.trim();
   if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return 0;
   const bps = Math.round(Number(text) * 100);
   return bps > 0 && bps <= 10_000 ? bps : 0;
 }
 
-export function problemWith(
+function problemWith(
   f: { title: string; organizer: string; story: string; cover: File | null; goal: bigint; minimum: bigint; deadline: string },
   drafts: Draft[],
-  now = Date.now() / 1000,
 ) {
+  const now = Date.now() / 1000;
   if (!f.title.trim() || !f.organizer.trim() || !f.story.trim()) return "Give the campaign a title, an organizer and a story.";
   if (!f.cover) return "Add a cover photo so donors can see the cause.";
   if (f.goal <= 0n) return "Set a goal above zero.";

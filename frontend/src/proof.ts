@@ -1,7 +1,7 @@
 import type { Signer } from "ethers";
 import { uploadMessage } from "./uploadAuth.js";
 
-export interface UploadContext {
+interface UploadContext {
   signer: Signer; factory: string; purpose: "campaign" | "proof";
   campaign?: string; milestone?: number;
 }
@@ -11,7 +11,7 @@ export interface UploadContext {
 // change them without the hash showing it. Each document lists its files with their own sha256, so
 // one hash on-chain covers every photo and receipt.
 
-export interface FileRef {
+interface FileRef {
   name: string;
   type: string;
   size: number;
@@ -44,24 +44,22 @@ export interface Verified<T> {
   ok: boolean;
 }
 
-type Fetch = (cid: string) => Promise<Uint8Array>;
-
 // Any gateway will do, because nothing it serves is trusted until it matches the on-chain hash.
 // ipfs.io and dweb.link stopped serving files to web pages, so the default is Pinata's.
-const GATEWAY = String(import.meta.env?.VITE_IPFS_GATEWAY || "https://gateway.pinata.cloud/ipfs/");
+const GATEWAY = String(import.meta.env.VITE_IPFS_GATEWAY || "https://gateway.pinata.cloud/ipfs/");
 
 export const gatewayUrl = (cid: string) => `${GATEWAY}${cid}`;
 
-export async function sha256(bytes: Uint8Array): Promise<string> {
+async function sha256(bytes: Uint8Array): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
   return `0x${Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/// The exact bytes that get pinned and hashed. Hashing the same bytes that were uploaded, rather than
-/// re-serialising later, is what makes the on-chain hash checkable.
-export const encodeDocument = (doc: object) => new TextEncoder().encode(JSON.stringify(doc));
+// The exact bytes that get pinned and hashed. Hashing the same bytes that were uploaded, rather than
+// re-serialising later, is what makes the on-chain hash checkable.
+const encodeDocument = (doc: object) => new TextEncoder().encode(JSON.stringify(doc));
 
-export const fetchFromGateway: Fetch = async (cid) => {
+async function fetchFromGateway(cid: string): Promise<Uint8Array> {
   const response = await fetch(gatewayUrl(cid), { signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`IPFS gateway responded ${response.status}`);
   if (!response.body || Number(response.headers.get("content-length")) > 3 * 1024 * 1024) throw new Error("IPFS file is too large");
@@ -79,7 +77,7 @@ export const fetchFromGateway: Fetch = async (cid) => {
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   return bytes;
-};
+}
 
 function isFileRef(file: unknown): file is FileRef {
   if (!file || typeof file !== "object") return false;
@@ -107,16 +105,15 @@ function filesOf(doc: CampaignDocument | ProofDocument): FileRef[] {
   return doc.kind === "clearfund/campaign" ? [doc.cover] : doc.files;
 }
 
-/// Fetches a document by CID, checks it against the hash stored on-chain, then checks every file it
-/// lists. A proof must also name the campaign and milestone it was posted for, so an old proof
-/// cannot be replayed on another milestone.
+// Fetches a document by CID, checks it against the hash stored on-chain, then checks every file it
+// lists. A proof must also name the campaign and milestone it was posted for, so an old proof
+// cannot be replayed on another milestone.
 export async function verifyDocument<T extends CampaignDocument | ProofDocument>(
   cid: string,
   onchainHash: string,
   expect: Partial<ProofDocument> = {},
-  fetchBytes: Fetch = fetchFromGateway
 ): Promise<Verified<T>> {
-  const bytes = await fetchBytes(cid);
+  const bytes = await fetchFromGateway(cid);
   const doc = parseDocument(bytes) as T;
   const matchesContext = Object.entries(expect).every(
     ([key, value]) => String((doc as unknown as Record<string, unknown>)[key]).toLowerCase() === String(value).toLowerCase()
@@ -127,7 +124,7 @@ export async function verifyDocument<T extends CampaignDocument | ProofDocument>
   const files = await Promise.all(
     filesOf(doc).map(async (file) => {
       try {
-        return { name: file.name, ok: (await sha256(await fetchBytes(file.cid))) === file.sha256.toLowerCase() };
+        return { name: file.name, ok: (await sha256(await fetchFromGateway(file.cid))) === file.sha256.toLowerCase() };
       } catch {
         return { name: file.name, ok: false };
       }
@@ -140,9 +137,9 @@ export async function verifyDocument<T extends CampaignDocument | ProofDocument>
 
 const MAX_SIDE = 1600;
 
-/// Photos are re-encoded at a sane size before hashing, so what donors see is exactly what was hashed
-/// and uploads stay under the server's body limit.
-export async function prepareFile(file: File): Promise<{ name: string; type: string; bytes: Uint8Array }> {
+// Photos are re-encoded at a sane size before hashing, so what donors see is exactly what was hashed
+// and uploads stay under the server's body limit.
+async function prepareFile(file: File): Promise<{ name: string; type: string; bytes: Uint8Array }> {
   if (!file.type.startsWith("image/") || file.type === "image/gif") {
     return { name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) };
   }
@@ -180,7 +177,7 @@ export async function uploadFile(file: File, context: UploadContext): Promise<Fi
   return { name: prepared.name, type: prepared.type, size: prepared.bytes.length, sha256: await sha256(prepared.bytes), cid };
 }
 
-/// Pins a document and returns what the contract stores for it.
+// Pins a document and returns what the contract stores for it.
 export async function uploadDocument(doc: CampaignDocument | ProofDocument, context: UploadContext): Promise<{ cid: string; hash: string }> {
   const bytes = encodeDocument(doc);
   const cid = await pin(`${doc.kind.replace("/", "-")}.json`, "application/json", bytes, context);

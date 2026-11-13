@@ -1,8 +1,9 @@
 import { ethers } from "ethers";
 
-export const USDC_DECIMALS = 6;
+const USDC_DECIMALS = 6;
 
-export function usd(value: bigint, decimals = 2) {
+export function usd(value: bigint | null, decimals = 2) {
+  if (value === null) return "—";
   const n = Number(ethers.formatUnits(value, USDC_DECIMALS));
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: decimals, minimumFractionDigits: 0 }).format(n);
 }
@@ -41,7 +42,7 @@ export function timeLeft(seconds: number) {
   return `${Math.max(minutes, 1)}m left`;
 }
 
-/// Seconds from a date input (YYYY-MM-DD) taken as the end of that day in the user's time zone.
+// Seconds from a date input (YYYY-MM-DD) taken as the end of that day in the user's time zone.
 export function endOfDay(value: string) {
   const [y, m, d] = value.split("-").map(Number);
   return Math.floor(new Date(y, m - 1, d, 23, 59, 59).getTime() / 1000);

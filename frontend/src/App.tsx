@@ -33,9 +33,9 @@ export default function App() {
   );
 }
 
-/// The router does not scroll by itself. A link with a hash (/#campaigns) lands on that section, even
-/// when clicked again on the page it already shows; any other new page opens at the top. Back and
-/// forward are left to the browser, which restores where the reader was.
+// The router does not scroll by itself. A link with a hash (/#campaigns) lands on that section, even
+// when clicked again on the page it already shows; any other new page opens at the top. Back and
+// forward are left to the browser, which restores where the reader was.
 function ScrollManager() {
   const { pathname, hash, key } = useLocation();
   const type = useNavigationType();

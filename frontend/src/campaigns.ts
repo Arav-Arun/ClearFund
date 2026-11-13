@@ -10,6 +10,7 @@ import type { CampaignDocument } from "./proof";
 export const Status = { Funding: 0, Active: 1, Completed: 2, Cancelled: 3 } as const;
 export const Step = { Pending: 0, InReview: 1, Released: 2 } as const;
 export const BPS = 10_000n;
+export const STATUS_TEXT = ["Raising funds", "Work in progress", "Completed", "Cancelled"];
 
 export interface Milestone {
   index: number;
@@ -64,7 +65,7 @@ export interface Ledger {
 const campaignAt = (address: string) => new ethers.Contract(address, CAMPAIGN_ABI, readProvider);
 const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, readProvider);
 
-/// Immutable, verified stories need not be fetched again on every balance refresh.
+// Immutable, verified stories need not be fetched again on every balance refresh.
 const stories = new Map<string, Promise<{ doc: CampaignDocument | null; docOk: boolean; coverOk: boolean }>>();
 async function loadStory(cid: string, hash: string) {
   const key = `${cid}:${hash.toLowerCase()}`;
@@ -92,9 +93,17 @@ export async function assertRegisteredCampaign(address: string) {
   if (!ethers.isAddress(address)) throw new Error("Invalid campaign address");
   const key = address.toLowerCase();
   if (!registrations.has(key)) {
-    const registry = await authenticateCampaign(address, FACTORY_REGISTRIES,
-      async (r, a) => new ethers.Contract(r.address, FACTORY_ABI, readProvider).isCampaign(a));
-    registrations.set(key, registry);
+    // A campaign-shaped contract is not enough: a configured factory must attest to it.
+    let unavailable = false;
+    for (const registry of FACTORY_REGISTRIES) {
+      try {
+        if (await new ethers.Contract(registry.address, FACTORY_ABI, readProvider).isCampaign(address)) {
+          registrations.set(key, registry);
+          return registry;
+        }
+      } catch { unavailable = true; }
+    }
+    throw new Error(unavailable ? "Campaign verification is temporarily unavailable. Try again." : "This address is not a registered ClearFund campaign.");
   }
   return registrations.get(key)!;
 }
@@ -167,9 +176,9 @@ export function useCampaigns() {
             registry.done = registry.next < registry.block && registry.pending.length === 0;
           } else {
             // Bound each page to 50,000 blocks and only commit its cursor on success.
-            const next = registry.next < 0 ? await readEventHead(eventSources) : registry.next;
+            const next = registry.next < 0 ? await readEventHead() : registry.next;
             const page = await scanLegacyPage({ next, block: registry.block }, async (fromBlock, toBlock) => {
-              const logs = await readEventLogs(eventSources, { address: registry.address,
+              const logs = await readEventLogs({ address: registry.address,
                 topics: [factory.interface.getEvent("CampaignCreated")!.topicHash], fromBlock, toBlock });
               return logs.reverse().map(log => String(factory.interface.parseLog(log)!.args.campaign));
             });
@@ -191,7 +200,7 @@ export function useCampaigns() {
       } catch {
         retry = true;
         // RPC payloads can include URLs, request details and internal errors; never render them.
-        if (live) setError(CAMPAIGN_CONNECTION_ERROR);
+        if (live) setError("We couldn’t load the campaigns from Sepolia. Please try again.");
       } finally {
         busy = false;
         if (live) {
@@ -300,19 +309,19 @@ function describe(log: ethers.LogDescription, campaign: Campaign) {
 }
 
 const LOG_CHUNK = 10_000;
-/// Events already read for each campaign, so a refresh only asks for the blocks it has not seen.
+// Events already read for each campaign, so a refresh only asks for the blocks it has not seen.
 const seen = new Map<string, { logs: ethers.Log[]; upTo: number }>();
 
-/// Reads a campaign's events. The first read walks back from the newest block and stops at the block
-/// where the factory created the campaign, so the cost depends on the campaign's age and not on how
-/// long the factory has existed. Later reads fetch only what is new.
+// Reads a campaign's events. The first read walks back from the newest block and stops at the block
+// where the factory created the campaign, so the cost depends on the campaign's age and not on how
+// long the factory has existed. Later reads fetch only what is new.
 async function campaignLogs(address: string) {
-  const latest = await readEventHead(eventSources);
+  const latest = await readEventHead();
   const cached = seen.get(address);
   if (cached) {
     for (let from = cached.upTo + 1; from <= latest; from += LOG_CHUNK) {
       const to = Math.min(from + LOG_CHUNK - 1, latest);
-      cached.logs.push(...(await readEventLogs(eventSources, { address, fromBlock: from, toBlock: to })));
+      cached.logs.push(...(await readEventLogs({ address, fromBlock: from, toBlock: to })));
       cached.upTo = to;
     }
     return cached.logs;
@@ -325,8 +334,8 @@ async function campaignLogs(address: string) {
   for (let to = latest; to >= floor; to -= LOG_CHUNK) {
     const range = { fromBlock: Math.max(to - LOG_CHUNK + 1, floor), toBlock: to };
     const [own, created] = await Promise.all([
-      readEventLogs(eventSources, { address, ...range }),
-      readEventLogs(eventSources, { address: registry.address, topics: birth, ...range }),
+      readEventLogs({ address, ...range }),
+      readEventLogs({ address: registry.address, topics: birth, ...range }),
     ]);
     logs.unshift(...own);
     if (created.length > 0) {
@@ -335,7 +344,6 @@ async function campaignLogs(address: string) {
     }
   }
   throw new Error("Campaign creation record could not be read");
-
 }
 
 async function loadLedger(address: string, campaign: Campaign): Promise<Ledger> {
@@ -360,14 +368,19 @@ async function loadLedger(address: string, campaign: Campaign): Promise<Ledger> 
   return { released, returned, activity };
 }
 
-/// What a milestone is worth to the creator right now: its share of the money donors still have in.
-export function milestoneAmount(campaign: Campaign, m: Milestone, ledger: Ledger | null) {
-  if (m.step === Step.Released) return ledger?.released[m.index] ?? 0n;
+// What a milestone is worth to the creator right now: its share of the money donors still have in.
+// A released amount is only known from its Released event, so it is null until the record loads.
+export function milestoneAmount(campaign: Campaign, m: Milestone, ledger: Ledger | null): bigint | null {
+  if (m.step === Step.Released) return ledger?.released[m.index] ?? null;
   const base = campaign.status === Status.Funding ? campaign.goal : campaign.activeRaised;
   return (base * BigInt(m.shareBps)) / BPS;
 }
 
-/// The chain's clock, which is what the contract judges every deadline by.
+export function fundedPercent(campaign: Campaign) {
+  return campaign.goal > 0n ? Math.min(100, Number((campaign.raised * 100n) / campaign.goal)) : 0;
+}
+
+// The chain's clock, which is what the contract judges every deadline by.
 export function useChainTime() {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
@@ -379,17 +392,9 @@ export function useChainTime() {
   return now;
 }
 
-export interface EventRange {
-  address: string;
-  topics?: Array<string | string[] | null>;
-  fromBlock: number;
-  toBlock: number;
-}
+// ------------------------------------------------------------------ RPC reads
 
-export interface EventSource<Log> {
-  getBlock(tag: "latest"): Promise<{ number: number } | null>;
-  getLogs(range: EventRange): Promise<Log[]>;
-}
+type EventRange = { address: string; topics?: Array<string | string[] | null>; fromBlock: number; toBlock: number };
 
 function temporary(error: unknown): boolean {
   if (error instanceof AggregateError) return error.errors.some(temporary);
@@ -404,13 +409,10 @@ const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 
 /** Race configured nodes for a successful read; a lagging node's error is not a successful quorum.
  * Retry the exact same range, never clip it and then mark omitted blocks as scanned. */
-async function eventRead<T, Log>(
-  sources: readonly EventSource<Log>[], read: (source: EventSource<Log>) => Promise<T>,
-  wait: (ms: number) => Promise<void>,
-): Promise<T> {
+async function eventRead<T>(read: (source: ethers.JsonRpcProvider) => Promise<T>): Promise<T> {
   for (const delay of [0, 300, 900]) {
-    if (delay) await wait(delay);
-    try { return await Promise.any(sources.map(source => Promise.resolve().then(() => read(source)))); }
+    if (delay) await pause(delay);
+    try { return await Promise.any(eventSources.map(source => Promise.resolve().then(() => read(source)))); }
     catch (error) {
       if (delay === 900 || !temporary(error)) throw error;
     }
@@ -419,33 +421,20 @@ async function eventRead<T, Log>(
 }
 
 /** A real block header, rather than FallbackProvider's aggregated, non-decreasing height. */
-export function readEventHead<Log>(sources: readonly EventSource<Log>[], wait = pause) {
-  return eventRead(sources, async source => {
+function readEventHead() {
+  return eventRead(async source => {
     const block = await source.getBlock("latest");
     if (!block || !Number.isSafeInteger(block.number) || block.number < 0) throw new Error("Latest block temporarily unavailable");
     return block.number;
-  }, wait);
+  });
 }
 
-export function readEventLogs<Log>(sources: readonly EventSource<Log>[], range: EventRange, wait = pause) {
-  return eventRead(sources, source => source.getLogs(range), wait);
+function readEventLogs(range: EventRange) {
+  return eventRead(source => source.getLogs(range));
 }
 
-export const CAMPAIGN_CONNECTION_ERROR = "We couldn’t load the campaigns from Sepolia. Please try again.";
-
-// A campaign-shaped contract is not enough: a configured factory must attest to it.
-export async function authenticateCampaign<T extends { address: string }>(
-  address: string, registries: T[], check: (registry: T, address: string) => Promise<boolean>,
-): Promise<T> {
-  let unavailable = false;
-  for (const registry of registries) {
-    try { if (await check(registry, address)) return registry; }
-    catch { unavailable = true; }
-  }
-  throw new Error(unavailable ? "Campaign verification is temporarily unavailable. Try again." : "This address is not a registered ClearFund campaign.");
-}
-
-export async function mapLimited<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>, onResult: (result: R) => void) {
+// Runs `work` over the items with at most `limit` in flight, reporting each success as it lands.
+async function mapLimited<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>, onResult: (result: R) => void) {
   let cursor = 0;
   let failures = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -459,7 +448,7 @@ export async function mapLimited<T, R>(items: T[], limit: number, work: (item: T
 
 /** A page is committed only after every range succeeds. A failed later chunk must not discard
  * campaigns already found in an earlier chunk or advance the caller's cursor past them. */
-export async function scanLegacyPage(
+async function scanLegacyPage(
   cursor: { next: number; block: number },
   query: (fromBlock: number, toBlock: number) => Promise<string[]>,
 ) {
@@ -475,7 +464,9 @@ export async function scanLegacyPage(
   return { addresses, next, pending, done: next < cursor.block && pending.length === 0 };
 }
 
-/// Sends one contract call with toasts, and tracks which action is pending so its button can say so.
+// ------------------------------------------------------------------ transactions
+
+// Sends one contract call with toasts, and tracks which action is pending so its button can say so.
 export function useTx(wallet: Wallet, address: string, onDone: () => void) {
   const [pending, setPending] = useState("");
   const busy = useRef(false);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getDefaultConfig, useConnectModal } from "@rainbow-me/rainbowkit";
 import { ethers } from "ethers";
-import { fallback, http, useAccount, useDisconnect, useSwitchChain, useWalletClient } from "wagmi";
+import { fallback, http, useAccount, useSwitchChain, useWalletClient } from "wagmi";
 import { sepolia } from "wagmi/chains";
 
 const env = import.meta.env;
@@ -14,17 +14,16 @@ const RPC_URLS = /^http:\/\/(localhost|127\.0\.0\.1)/.test(CONFIGURED_RPC)
   ? [CONFIGURED_RPC]
   : [...new Set([CONFIGURED_RPC, PUBLIC_RPC].filter(Boolean))];
 
-export const LEGACY_FACTORY_ADDRESS = String(env.VITE_FACTORY_ADDRESS || "").trim();
+const LEGACY_FACTORY_ADDRESS = String(env.VITE_FACTORY_ADDRESS || "").trim();
 export const V2_FACTORY_ADDRESS = String(env.VITE_FACTORY_V2_ADDRESS || "").trim();
 export const FACTORY_ADDRESS = V2_FACTORY_ADDRESS || LEGACY_FACTORY_ADDRESS;
-export const FACTORY_DEPLOY_BLOCK = Number(env.VITE_FACTORY_DEPLOY_BLOCK || 0);
 export const FACTORY_REGISTRIES = [
   ...(V2_FACTORY_ADDRESS ? [{ address: V2_FACTORY_ADDRESS, block: Number(env.VITE_FACTORY_V2_DEPLOY_BLOCK || 0), version: 2 }] : []),
-  ...(LEGACY_FACTORY_ADDRESS ? [{ address: LEGACY_FACTORY_ADDRESS, block: FACTORY_DEPLOY_BLOCK, version: 1 }] : []),
+  ...(LEGACY_FACTORY_ADDRESS ? [{ address: LEGACY_FACTORY_ADDRESS, block: Number(env.VITE_FACTORY_DEPLOY_BLOCK || 0), version: 1 }] : []),
 ];
 export const USDC_ADDRESS = String(env.VITE_USDC_ADDRESS || "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238").trim();
 export const EXPLORER = "https://sepolia.etherscan.io";
-export const SEPOLIA_CHAIN_ID = sepolia.id;
+const SEPOLIA_CHAIN_ID = sepolia.id;
 
 export const FACTORY_ABI = [
   "function isCampaign(address) view returns (bool)",
@@ -32,7 +31,6 @@ export const FACTORY_ABI = [
   "function campaignCount() view returns (uint256)",
   "function campaignsPage(uint256 offset, uint256 limit) view returns (address[])",
   "function createCampaign(tuple(string metadataCid, bytes32 metadataHash, uint256 goal, uint256 minimum, uint256 fundingDeadline) config, tuple(uint256 shareBps, uint256 deadline)[] milestones) returns (address)",
-  "function getCampaigns() view returns (address[])",
   "event CampaignCreated(address indexed campaign, address indexed creator)",
 ];
 
@@ -90,7 +88,6 @@ export const CAMPAIGN_ABI = [
 
 export const USDC_ABI = [
   "function balanceOf(address) view returns (uint256)",
-  "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
   "function nonces(address) view returns (uint256)",
   "function name() view returns (string)",
@@ -130,14 +127,12 @@ export interface Wallet {
   signer: ethers.Signer | null;
   wrongNetwork: boolean;
   connect: () => void;
-  disconnect: () => void;
   switchToSepolia: () => void;
 }
 
 export function useWallet(): Wallet {
   const { address, chainId, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
-  const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
   const { data: walletClient } = useWalletClient();
   const [signer, setSigner] = useState<ethers.Signer | null>(null);
@@ -166,12 +161,11 @@ export function useWallet(): Wallet {
     signer,
     wrongNetwork: !!account && chainId !== SEPOLIA_CHAIN_ID,
     connect: () => openConnectModal?.(),
-    disconnect: () => disconnect(),
     switchToSepolia: () => switchChain({ chainId: SEPOLIA_CHAIN_ID }),
   };
 }
 
-/// Signs an EIP-2612 permit so a donation takes one wallet confirmation instead of approve + donate.
+// Signs an EIP-2612 permit so a donation takes one wallet confirmation instead of approve + donate.
 export async function signPermit(signer: ethers.Signer, spender: string, amount: bigint) {
   const owner = await signer.getAddress();
   const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, readProvider);

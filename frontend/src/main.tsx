@@ -12,7 +12,7 @@ import { wagmiConfig } from "./chain";
 
 const queryClient = new QueryClient();
 
-/// A crash inside a wallet library (its modal renders outside the app) must not leave a blank page.
+// A crash inside a wallet library (its modal renders outside the app) must not leave a blank page.
 class Fallback extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
