@@ -6,14 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.10",
     "@tanstack/react-query": "^5.100.8",
-    "@vercel/blob": "^2.3.3",
+    "@vercel/blob": "2.4.0",
     "ethers": "^6.16.0",
-    "openai": "^4.0.0",
+    "lucide-react": "^0.468.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-hot-toast": "^2.6.0",
@@ -31,7 +32,12 @@
   },
   "overrides": {
     "axios": "^1.16.0",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "ws": "^8.22.2",
+    "decode-uri-component": "^0.5.1",
+    "cuer": {
+      "qr": "0.5.5"
+    }
   },
   "author": "Arav Arun"
 }

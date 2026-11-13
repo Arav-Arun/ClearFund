@@ -10,11 +10,12 @@
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
+    "allowJs": true,
     "jsx": "react-jsx",
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["."]
+  "include": ["src", "api", "vite.config.ts"]
 }

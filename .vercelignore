@@ -1,0 +1,15 @@
+# Only the frontend is deployed. Never upload secrets, keys or the contract workspace.
+.env
+.env.*
+*.env
+.demo-wallets.env
+.vercel/output
+contracts
+.arkenos
+.optimus
+**/node_modules
+frontend/dist
+
+# Local portfolio source images and review notes are not part of the app.
+portfolio-assets
+END_TO_END_REVIEW.md

@@ -2,7 +2,7 @@
 node_modules/
 frontend/node_modules/
 package-lock.json
-frontend/package-lock.json
+!frontend/package-lock.json
 
 # Build output
 dist/
@@ -48,3 +48,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .vercel
+
+# Local agent tooling
+.arkenos/
+.optimus/
+
+# Transaction simulations and broadcasts stay local
+contracts/broadcast/
+contracts/cache/
+contracts/out/
+portfolio-assets/
+
+# Local review notes, not for the public repo
+END_TO_END_REVIEW.md
